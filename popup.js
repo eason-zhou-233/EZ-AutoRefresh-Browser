@@ -1,42 +1,278 @@
-
 const $ = id => document.getElementById(id);
-const fixedHour = $("fixed-hour"), fixedMinute = $("fixed-minute"), fixedSecond = $("fixed-second");
-const minHour = $("min-hour"), minMinute = $("min-minute"), minSecond = $("min-second");
-const maxHour = $("max-hour"), maxMinute = $("max-minute"), maxSecond = $("max-second");
+
+const fixedHour = $("fixed-hour");
+const fixedMinute = $("fixed-minute");
+const fixedSecond = $("fixed-second");
+
+const minHour = $("min-hour");
+const minMinute = $("min-minute");
+const minSecond = $("min-second");
+
+const maxHour = $("max-hour");
+const maxMinute = $("max-minute");
+const maxSecond = $("max-second");
+
 let currentTasks = {};
-function toSeconds(h, m, s) { return +h * 3600 + +m * 60 + +s; }
-document.querySelectorAll("input[name=mode]").forEach(r => r.onchange = () => {
-  const m = document.querySelector("input[name=mode]:checked").value;
-  $("fixed-box").style.display = m === "fixed" ? "block" : "none";
-  $("random-box").style.display = m === "random" ? "block" : "none";
-});
-function formatRemain(ms) {
-  if (ms <= 0) return "即将刷新";
-  let t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-  return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+
+function toSeconds(h, m, s) {
+
+  return Number(h) * 3600 +
+    Number(m) * 60 +
+    Number(s);
 }
-$("startBtn").onclick = async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const mode = document.querySelector("input[name=mode]:checked").value;
-  const config = mode === "fixed" ?
-    { mode, interval: toSeconds(fixedHour.value, fixedMinute.value, fixedSecond.value) } :
-    { mode, min: toSeconds(minHour.value, minMinute.value, minSecond.value), max: toSeconds(maxHour.value, maxMinute.value, maxSecond.value) };
-  chrome.runtime.sendMessage({ action: "start", tabId: tab.id, url: tab.url, config }, () => { loadStats(); loadTasks(); });
-};
-$("stopBtn").onclick = async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  chrome.runtime.sendMessage({ action: "stop", tabId: tab.id }, () => { loadStats(); loadTasks(); });
-};
-$("stopAllBtn").onclick = () => chrome.runtime.sendMessage({ action: "stopAll" }, () => { loadStats(); loadTasks(); });
-function renderTasks() {
-  const c = $("taskList"); c.innerHTML = "";
-  Object.values(currentTasks).forEach(t => {
-    const d = document.createElement("div"); d.className = "task";
-    d.innerHTML = `<div><b>Tab:</b> ${t.tabId}</div><div>${t.url}</div><div>模式:${t.mode}</div><div>倒计时:${formatRemain(t.nextRunAt - Date.now())}</div><div>下次刷新:${new Date(t.nextRunAt).toLocaleTimeString()}</div>`;
-    c.appendChild(d);
+
+document
+  .querySelectorAll("input[name=mode]")
+  .forEach(el => {
+
+    el.addEventListener("change", () => {
+
+      const mode =
+        document.querySelector(
+          "input[name=mode]:checked"
+        ).value;
+
+      $("fixed-box").style.display =
+        mode === "fixed"
+          ? "block"
+          : "none";
+
+      $("random-box").style.display =
+        mode === "random"
+          ? "block"
+          : "none";
+    });
+
   });
+
+function formatRemain(ms) {
+
+  if (ms <= 0) {
+    return "即将刷新";
+  }
+
+  const total =
+    Math.floor(ms / 1000);
+
+  const h =
+    Math.floor(total / 3600);
+
+  const m =
+    Math.floor(
+      (total % 3600) / 60
+    );
+
+  const s =
+    total % 60;
+
+  return (
+    String(h).padStart(2, "0")
+    + ":"
+    + String(m).padStart(2, "0")
+    + ":"
+    + String(s).padStart(2, "0")
+  );
 }
-function loadTasks() { chrome.runtime.sendMessage({ action: "getTasks" }, t => { currentTasks = t || {}; renderTasks(); }); }
-function loadStats() { chrome.runtime.sendMessage({ action: "stats" }, d => { $("status").innerText = `当前运行任务：${d?.count || 0}`; }); }
-setInterval(renderTasks, 1000);
-loadStats(); loadTasks();
+
+async function refreshView() {
+
+  loadStats();
+  loadTasks();
+}
+
+$("startBtn").onclick = async () => {
+
+  const [tab] =
+    await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
+
+  const mode =
+    document.querySelector(
+      "input[name=mode]:checked"
+    ).value;
+
+  const config =
+    mode === "fixed"
+      ? {
+        mode,
+        interval:
+          toSeconds(
+            fixedHour.value,
+            fixedMinute.value,
+            fixedSecond.value
+          )
+      }
+      : {
+        mode,
+        min:
+          toSeconds(
+            minHour.value,
+            minMinute.value,
+            minSecond.value
+          ),
+        max:
+          toSeconds(
+            maxHour.value,
+            maxMinute.value,
+            maxSecond.value
+          )
+      };
+
+  chrome.runtime.sendMessage(
+    {
+      action: "start",
+      tabId: tab.id,
+      url: tab.url,
+      config
+    },
+    () => {
+      loadTasks();
+      loadStats();
+    }
+  );
+};
+
+$("stopBtn").onclick = async () => {
+
+  const [tab] =
+    await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
+
+  chrome.runtime.sendMessage(
+    {
+      action: "stop",
+      tabId: tab.id
+    },
+    () => {
+      loadTasks();
+      loadStats();
+    }
+  );
+};
+
+$("stopAllBtn").onclick = () => {
+
+  chrome.runtime.sendMessage(
+    {
+      action: "stopAll"
+    },
+    () => {
+      loadTasks();
+      loadStats();
+    }
+  );
+};
+
+function renderTasks() {
+
+  const container =
+    $("taskList");
+
+  container.innerHTML = "";
+
+  Object.values(currentTasks)
+    .forEach(task => {
+
+      const host =
+        new URL(task.url)
+          .hostname;
+
+      const remain =
+        task.nextRunAt -
+        Date.now();
+
+      const div =
+        document.createElement(
+          "div"
+        );
+
+      div.className =
+        "task";
+
+      div.innerHTML = `
+
+        <div class="task-status">
+            🟢 正在运行
+        </div>
+
+        <div class="task-host">
+            ${host}
+        </div>
+
+        <div>
+            ${task.mode === "fixed"
+          ? "固定刷新"
+          : "随机刷新"
+        }
+        </div>
+
+        <div class="task-countdown">
+            剩余
+            ${formatRemain(remain)}
+        </div>
+
+        <div class="task-next">
+            下次刷新：
+            ${new Date(
+          task.nextRunAt
+        ).toLocaleTimeString()}
+        </div>
+        `;
+
+      container.appendChild(div);
+    });
+
+  if (
+    Object.keys(currentTasks)
+      .length === 0
+  ) {
+
+    container.innerHTML = `
+        <div class="task">
+            当前没有运行中的任务
+        </div>
+        `;
+  }
+}
+
+function loadTasks() {
+
+  chrome.runtime.sendMessage(
+    {
+      action: "getTasks"
+    },
+    tasks => {
+
+      currentTasks =
+        tasks || {};
+
+      renderTasks();
+    }
+  );
+}
+
+function loadStats() {
+
+  chrome.runtime.sendMessage(
+    {
+      action: "stats"
+    },
+    data => {
+
+      $("status").innerText =
+        `当前运行任务：${data?.count || 0
+        }`;
+    }
+  );
+}
+
+setInterval(
+  renderTasks,
+  1000
+);
+
+refreshView();

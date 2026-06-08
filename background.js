@@ -16,14 +16,62 @@ function restoreTasks() {
         else chrome.alarms.create(`refresh_${t.tabId}`, { when: t.nextRunAt });
     });
 }
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.action === "start") { tasks[msg.tabId] = { tabId: msg.tabId, url: msg.url, ...msg.config }; schedule(tasks[msg.tabId]); }
-    if (msg.action === "stop") { delete tasks[msg.tabId]; chrome.alarms.clear(`refresh_${msg.tabId}`); save(); }
-    if (msg.action === "stopAll") { tasks = {}; chrome.alarms.clearAll(); save(); }
-    if (msg.action === "getTasks") sendResponse(JSON.parse(JSON.stringify(tasks)));
-    if (msg.action === "stats") sendResponse({ count: Object.keys(tasks).length });
-    return true;
-});
+chrome.runtime.onMessage.addListener(
+    (msg, sender, sendResponse) => {
+        if (msg.action === "start") {
+            tasks[msg.tabId] = {
+                tabId: msg.tabId,
+                url: msg.url,
+                ...msg.config
+            };
+            schedule(tasks[msg.tabId]);
+            sendResponse({
+                success: true
+            });
+            return true;
+        }
+
+        if (msg.action === "stop") {
+            delete tasks[msg.tabId];
+            chrome.alarms.clear(
+                `refresh_${msg.tabId}`
+            );
+            save();
+            sendResponse({
+                success: true
+            });
+            return true;
+        }
+
+        if (msg.action === "stopAll") {
+            tasks = {};
+            chrome.alarms.clearAll();
+            save();
+            sendResponse({
+                success: true
+            });
+            return true;
+        }
+
+        if (msg.action === "getTasks") {
+            sendResponse(
+                JSON.parse(
+                    JSON.stringify(tasks)
+                )
+            );
+            return true;
+        }
+
+        if (msg.action === "stats") {
+            sendResponse({
+                count:
+                    Object.keys(tasks)
+                        .length
+            });
+            return true;
+        }
+    }
+);
 chrome.alarms.onAlarm.addListener(async a => {
     if (!a.name.startsWith("refresh_")) return;
     const tabId = Number(a.name.replace("refresh_", ""));
