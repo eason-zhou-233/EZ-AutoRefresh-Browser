@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+    <h2>Auto Refresh Pro</h2>
+    <div id="status">当前运行任务：0</div>
+    <label><input type="radio" name="mode" value="fixed" checked>固定时间</label>
+    <label><input type="radio" name="mode" value="random">随机时间</label>
+
+    <div id="fixed-box">
+        <input id="fixed-hour" type="number" value="0">时
+        <input id="fixed-minute" type="number" value="5">分
+        <input id="fixed-second" type="number" value="0">秒
+    </div>
+
+    <div id="random-box" style="display:none">
+        最小 <input id="min-hour" type="number" value="0">时 <input id="min-minute" type="number" value="4">分 <input
+            id="min-second" type="number" value="0">秒<br>
+        最大 <input id="max-hour" type="number" value="0">时 <input id="max-minute" type="number" value="6">分 <input
+            id="max-second" type="number" value="0">秒
+    </div>
+
+    <button id="startBtn">启动当前页面刷新</button>
+    <button id="stopBtn">停止当前页面刷新</button>
+    <button id="stopAllBtn">停止全部任务</button>
+    <hr>
+    <div id="taskList"></div>
+    <script src="popup.js"></script>
+</body>
+
+</html>
