@@ -37,6 +37,19 @@ function secondsToHMS(totalSec) {
     };
 }
 
+/** 将秒数格式化为简洁中文时间，如 "4分30秒" */
+function formatInterval(totalSec) {
+    if (!totalSec && totalSec !== 0) return "";
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    const parts = [];
+    if (h > 0) parts.push(h + "时");
+    if (m > 0) parts.push(m + "分");
+    if (s > 0 || parts.length === 0) parts.push(s + "秒");
+    return parts.join("");
+}
+
 // ---------- 主表单模式切换 ----------
 
 document.querySelectorAll("input[name=mode]").forEach(el => {
@@ -194,7 +207,7 @@ function renderTasks() {
         div.innerHTML = `
             <div class="task-status">🟢 正在运行</div>
             <div class="task-host">${host}</div>
-            <div>${task.mode === "fixed" ? "固定刷新" : "随机刷新"}</div>
+            <div>${task.mode === "fixed" ? `固定刷新（${formatInterval(task.interval)}）` : `随机刷新（${formatInterval(task.min)} ~ ${formatInterval(task.max)}）`}</div>
             <div class="task-countdown">剩余 ${formatRemain(remain)}</div>
             <div class="task-next">下次刷新：${new Date(task.nextRunAt).toLocaleTimeString()}</div>
             <div class="task-actions">
@@ -333,7 +346,26 @@ function renderEditPanel() {
 
 // ---------- 定时刷新倒计时 ----------
 
+let tickCount = 0;
 setInterval(() => {
+    tickCount++;
+
+    // 每 1 秒从 background 同步一次最新任务数据，确保倒计时在页面刷新后能更新
+    if (tickCount % 1 === 0) {
+        chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
+            if (tasks) {
+                currentTasks = tasks;
+                // 如果之前任务数为0但现在有新任务（或反之），需要全量重绘
+                const container = $("taskList");
+                const domTaskCount = container.querySelectorAll(".task[data-task-id]").length;
+                const newTaskCount = Object.keys(tasks).length;
+                if (domTaskCount !== newTaskCount && editingTaskId === null) {
+                    renderTasks();
+                }
+            }
+        });
+    }
+
     // 编辑状态下不整体重绘，只更新动态文本
     if (editingTaskId !== null) {
         updateTaskDisplay();
