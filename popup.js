@@ -350,8 +350,8 @@ let tickCount = 0;
 setInterval(() => {
     tickCount++;
 
-    // 每 1 秒从 background 同步一次最新任务数据，确保倒计时在页面刷新后能更新
-    if (tickCount % 1 === 0) {
+    // 每 3 秒从 background 同步一次最新任务数据，确保倒计时在页面刷新后能更新
+    if (tickCount % 3 === 0) {
         chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
             if (tasks) {
                 currentTasks = tasks;
