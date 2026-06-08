@@ -13,6 +13,7 @@ const maxMinute = $("max-minute");
 const maxSecond = $("max-second");
 
 let currentTasks = {};
+let editingTaskId = null;
 
 function toSeconds(h, m, s) {
 
@@ -186,12 +187,51 @@ function renderTasks() {
         Date.now();
 
       const div =
-        document.createElement(
-          "div"
-        );
+        document.createElement("div");
 
-      div.className =
-        "task";
+      div.className = "task";
+
+      let editHtml = "";
+
+      if (
+        editingTaskId ===
+        task.tabId
+      ) {
+
+        editHtml = `
+            <div class="edit-panel">
+                <div>
+                <input
+                    id="edit-hour-${task.tabId}"
+                    type="number"
+                    value="0">
+                时
+                <input
+                    id="edit-minute-${task.tabId}"
+                    type="number"
+                    value="${task.interval
+            ?
+            Math.floor(
+              task.interval / 60
+            )
+            :
+            5
+          }">
+                分
+                <input
+                    id="edit-second-${task.tabId}"
+                    type="number"
+                    value="0">
+                秒
+                </div>
+                <button
+                    class="task-btn edit-btn"
+                    data-save="${task.tabId}">
+                    保存
+                </button>
+            </div>
+            `;
+      }
 
       div.innerHTML = `
 
@@ -221,24 +261,43 @@ function renderTasks() {
           task.nextRunAt
         ).toLocaleTimeString()}
         </div>
+
+        ${editHtml}
+
+        <div class="task-actions">
+            <button
+                class="task-btn edit-btn"
+                data-edit="${task.tabId}">
+                编辑
+            </button>
+
+            <button
+                class="task-btn stop-task-btn"
+                data-stop="${task.tabId}">
+                停止
+            </button>
+
+        </div>
         `;
 
       container.appendChild(div);
     });
+
+  bindTaskButtons();
 
   if (
     Object.keys(currentTasks)
       .length === 0
   ) {
 
-    container.innerHTML = `
+    container.innerHTML =
+      `
         <div class="task">
             当前没有运行中的任务
         </div>
         `;
   }
 }
-
 function loadTasks() {
 
   chrome.runtime.sendMessage(
@@ -276,3 +335,110 @@ setInterval(
 );
 
 refreshView();
+
+function bindTaskButtons() {
+
+  document
+    .querySelectorAll(
+      "[data-stop]"
+    )
+    .forEach(btn => {
+
+      btn.onclick = () => {
+
+        chrome.runtime.sendMessage(
+          {
+            action: "stop",
+            tabId:
+              Number(
+                btn.dataset.stop
+              )
+          },
+          () => {
+
+            loadTasks();
+            loadStats();
+          }
+        );
+      };
+    });
+
+  document
+    .querySelectorAll(
+      "[data-edit]"
+    )
+    .forEach(btn => {
+
+      btn.onclick = () => {
+
+        editingTaskId =
+          Number(
+            btn.dataset.edit
+          );
+
+        renderTasks();
+      };
+    });
+
+  document
+    .querySelectorAll(
+      "[data-save]"
+    )
+    .forEach(btn => {
+
+      btn.onclick = () => {
+
+        const tabId =
+          Number(
+            btn.dataset.save
+          );
+
+        const h =
+          Number(
+            document.getElementById(
+              `edit-hour-${tabId}`
+            ).value
+          );
+
+        const m =
+          Number(
+            document.getElementById(
+              `edit-minute-${tabId}`
+            ).value
+          );
+
+        const s =
+          Number(
+            document.getElementById(
+              `edit-second-${tabId}`
+            ).value
+          );
+
+        chrome.runtime.sendMessage(
+          {
+            action:
+              "updateTask",
+
+            tabId,
+
+            config: {
+
+              mode: "fixed",
+
+              interval:
+                h * 3600 +
+                m * 60 +
+                s
+            }
+          },
+          () => {
+
+            editingTaskId =
+              null;
+
+            loadTasks();
+          }
+        );
+      };
+    });
+}

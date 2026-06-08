@@ -118,3 +118,38 @@ button {
     color: #888;
     font-size: 12px;
 }
+
+.task-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.task-btn {
+    flex: 1;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.edit-btn {
+    background: #1677ff;
+    color: white;
+}
+
+.stop-task-btn {
+    background: #ff4d4f;
+    color: white;
+}
+
+.edit-panel {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #eee;
+}
+
+.edit-panel input {
+    width: 50px;
+}

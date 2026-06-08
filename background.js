@@ -62,6 +62,33 @@ chrome.runtime.onMessage.addListener(
             return true;
         }
 
+        if (msg.action === "updateTask") {
+            const task = tasks[msg.tabId];
+            if (!task) {
+                sendResponse({
+                    success: false
+                });
+                return true;
+            }
+
+            Object.assign(
+                task,
+                msg.config
+            );
+
+            chrome.alarms.clear(
+                `refresh_${msg.tabId}`
+            );
+
+            schedule(task);
+            save();
+            sendResponse({
+                success: true
+            });
+
+            return true;
+        }
+
         if (msg.action === "stats") {
             sendResponse({
                 count:
