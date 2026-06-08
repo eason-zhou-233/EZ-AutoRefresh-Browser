@@ -1,6 +1,28 @@
 
 let tasks = {};
-chrome.storage.local.get(["tasks"], d => { tasks = d.tasks || {}; restoreTasks(); });
+
+// 使用就绪标志解决 Service Worker 唤醒时的初始化竞态问题
+let ready = false;
+const readyQueue = [];
+
+function onReady(cb) {
+    if (ready) { cb(); return; }
+    readyQueue.push(cb);
+}
+
+function setReady() {
+    ready = true;
+    readyQueue.forEach(cb => cb());
+    readyQueue.length = 0;
+}
+
+// 异步加载持久化任务，完成后标记就绪
+chrome.storage.local.get(["tasks"], d => {
+    tasks = d.tasks || {};
+    restoreTasks();
+    setReady();
+});
+
 function save() { chrome.storage.local.set({ tasks }); }
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function schedule(task) {
@@ -16,89 +38,46 @@ function restoreTasks() {
         else chrome.alarms.create(`refresh_${t.tabId}`, { when: t.nextRunAt });
     });
 }
-chrome.runtime.onMessage.addListener(
-    (msg, sender, sendResponse) => {
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // 所有需要读取 tasks 的操作都等待初始化完成
+    onReady(() => {
         if (msg.action === "start") {
-            tasks[msg.tabId] = {
-                tabId: msg.tabId,
-                url: msg.url,
-                ...msg.config
-            };
+            tasks[msg.tabId] = { tabId: msg.tabId, url: msg.url, ...msg.config };
             schedule(tasks[msg.tabId]);
-            sendResponse({
-                success: true
-            });
-            return true;
+            sendResponse({ success: true });
         }
-
-        if (msg.action === "stop") {
+        else if (msg.action === "stop") {
             delete tasks[msg.tabId];
-            chrome.alarms.clear(
-                `refresh_${msg.tabId}`
-            );
+            chrome.alarms.clear(`refresh_${msg.tabId}`);
             save();
-            sendResponse({
-                success: true
-            });
-            return true;
+            sendResponse({ success: true });
         }
-
-        if (msg.action === "stopAll") {
+        else if (msg.action === "stopAll") {
             tasks = {};
             chrome.alarms.clearAll();
             save();
-            sendResponse({
-                success: true
-            });
-            return true;
+            sendResponse({ success: true });
         }
-
-        if (msg.action === "getTasks") {
-            sendResponse(
-                JSON.parse(
-                    JSON.stringify(tasks)
-                )
-            );
-            return true;
+        else if (msg.action === "getTasks") {
+            sendResponse(JSON.parse(JSON.stringify(tasks)));
         }
-
-        if (msg.action === "updateTask") {
+        else if (msg.action === "updateTask") {
             const task = tasks[msg.tabId];
-            if (!task) {
-                sendResponse({
-                    success: false
-                });
-                return true;
-            }
-
-            Object.assign(
-                task,
-                msg.config
-            );
-
-            chrome.alarms.clear(
-                `refresh_${msg.tabId}`
-            );
-
+            if (!task) { sendResponse({ success: false }); return; }
+            Object.assign(task, msg.config);
+            chrome.alarms.clear(`refresh_${msg.tabId}`);
             schedule(task);
             save();
-            sendResponse({
-                success: true
-            });
-
-            return true;
+            sendResponse({ success: true });
         }
-
-        if (msg.action === "stats") {
-            sendResponse({
-                count:
-                    Object.keys(tasks)
-                        .length
-            });
-            return true;
+        else if (msg.action === "stats") {
+            sendResponse({ count: Object.keys(tasks).length });
         }
-    }
-);
+    });
+    return true; // 保持消息通道开启以异步响应
+});
+
 chrome.alarms.onAlarm.addListener(async a => {
     if (!a.name.startsWith("refresh_")) return;
     const tabId = Number(a.name.replace("refresh_", ""));

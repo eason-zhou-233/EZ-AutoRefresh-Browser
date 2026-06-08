@@ -144,6 +144,8 @@ button {
     color: white;
 }
 
+/* ---- 编辑面板 ---- */
+
 .edit-panel {
     margin-top: 10px;
     padding-top: 10px;
@@ -154,21 +156,36 @@ button {
     width: 50px;
 }
 
-.edit-sub-actions{
-    display:flex;
-    justify-content:center;
-    gap:10px;
-    margin-top:10px;
+.edit-mode-row {
+    margin-bottom: 8px;
 }
 
-.edit-save-btn,
-.edit-cancel-btn{
-    flex:none;
-    width:80px;
-    height:24px;
-    font-size:12px;
+.edit-fixed-box,
+.edit-random-box {
+    margin: 6px 0;
 }
 
-.edit-cancel-btn{
-    background:#d9d9d9;
+.edit-sub-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.edit-save-btn {
+    flex: none;
+    width: 80px;
+    height: 24px;
+    font-size: 12px;
+    background: #1677ff;
+    color: white;
+}
+
+.edit-cancel-btn {
+    flex: none;
+    width: 80px;
+    height: 24px;
+    font-size: 12px;
+    background: #d9d9d9;
+    color: #333;
 }
