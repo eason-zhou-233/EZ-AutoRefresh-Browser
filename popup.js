@@ -130,9 +130,9 @@ function buildEditPanel(task) {
     const isFixed = task.mode === "fixed";
 
     // 从当前任务配置还原时/分/秒
-    let f = { h: 0, m: 5, s: 0 };
-    let rMin = { h: 0, m: 4, s: 0 };
-    let rMax = { h: 0, m: 6, s: 0 };
+    let f = { h: 0, m: 3, s: 0 };
+    let rMin = { h: 0, m: 3, s: 0 };
+    let rMax = { h: 0, m: 5, s: 0 };
 
     if (isFixed) {
         f = secondsToHMS(task.interval || 300);
@@ -180,10 +180,9 @@ function buildEditPanel(task) {
 function renderTasks() {
     const container = $("taskList");
 
-    // 如果正在编辑中，不整体重绘，只做增量更新
-    if (editingTaskId !== null) {
-        updateTaskDisplay();
-        return;
+    // 如果编辑中的任务已被后台删除（如被停止），自动清除编辑状态
+    if (editingTaskId !== null && !currentTasks[editingTaskId]) {
+        editingTaskId = null;
     }
 
     container.innerHTML = "";
@@ -199,6 +198,7 @@ function renderTasks() {
             try { return new URL(task.url).hostname; } catch (e) { return task.url; }
         })();
         const remain = (task.nextRunAt || Date.now()) - Date.now();
+        const isEditing = editingTaskId === task.tabId;
 
         const div = document.createElement("div");
         div.className = "task";
@@ -210,6 +210,7 @@ function renderTasks() {
             <div>${task.mode === "fixed" ? `固定刷新（${formatInterval(task.interval)}）` : `随机刷新（${formatInterval(task.min)} ~ ${formatInterval(task.max)}）`}</div>
             <div class="task-countdown">剩余 ${formatRemain(remain)}</div>
             <div class="task-next">下次刷新：${new Date(task.nextRunAt).toLocaleTimeString()}</div>
+            ${isEditing ? buildEditPanel(task) : ""}
             <div class="task-actions">
                 <button class="task-btn edit-btn" data-edit="${task.tabId}">编辑</button>
                 <button class="task-btn stop-task-btn" data-stop="${task.tabId}">停止</button>
@@ -260,7 +261,7 @@ function bindTaskButtons() {
     document.querySelectorAll("[data-edit]").forEach(btn => {
         btn.onclick = () => {
             editingTaskId = Number(btn.dataset.edit);
-            renderEditPanel();
+            renderTasks();
         };
     });
 
@@ -355,11 +356,11 @@ setInterval(() => {
         chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
             if (tasks) {
                 currentTasks = tasks;
-                // 如果之前任务数为0但现在有新任务（或反之），需要全量重绘
+                // 任务数量变化时全量重绘（编辑中仍允许重绘，renderTasks 会自动处理编辑状态）
                 const container = $("taskList");
                 const domTaskCount = container.querySelectorAll(".task[data-task-id]").length;
                 const newTaskCount = Object.keys(tasks).length;
-                if (domTaskCount !== newTaskCount && editingTaskId === null) {
+                if (domTaskCount !== newTaskCount) {
                     renderTasks();
                 }
             }

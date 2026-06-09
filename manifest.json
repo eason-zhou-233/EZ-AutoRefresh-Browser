@@ -1,10 +1,26 @@
 {
-  "manifest_version": 3,
-  "name": "Auto Refresh Pro",
-  "version": "1.0.0",
-  "description": "Auto refresh tabs with fixed/random intervals",
-  "permissions": ["tabs","alarms","storage"],
-  "host_permissions": ["<all_urls>"],
-  "background": {"service_worker": "background.js"},
-  "action": {"default_popup": "popup.html"}
+    "manifest_version": 3,
+    "name": "EZ AutoRefresh 页面刷新工具",
+    "version": "1.0.0",
+    "description": "Powerful auto refresh extension for Chrome. Refresh pages at fixed or random intervals, manage multiple refresh tasks, monitor countdowns, and automatically restore tasks after browser restart.",
+    "permissions": [
+        "tabs",
+        "alarms",
+        "storage"
+    ],
+    "icons": {
+        "16": "icons/icon_1.png",
+        "32": "icons/icon_1.png",
+        "48": "icons/icon_1.png",
+        "128": "icons/icon_1.png"
+    },
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_popup": "popup.html"
+    }
 }
