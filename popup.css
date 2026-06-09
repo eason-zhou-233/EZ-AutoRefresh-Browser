@@ -1,3 +1,15 @@
+/**
+ * EZ AutoRefresh - 弹出窗口样式表
+ * =================================
+ * 采用卡片式布局，使用柔和的圆角和阴影营造现代 UI 风格。
+ * 配色以蓝白为主调，操作按钮使用语义化颜色（蓝=启动、黄=停止、红=停止全部）。
+ */
+
+/* ============================================================
+   全局基础样式
+   ============================================================ */
+
+/* popup 窗口主体：固定宽度 340px，浅灰蓝背景 */
 body {
     width: 340px;
     padding: 16px;
@@ -9,6 +21,11 @@ body {
     color: #333;
 }
 
+/* ============================================================
+   状态栏 & 配置卡片
+   ============================================================ */
+
+/* 顶部状态栏：显示当前运行任务数量 */
 #status {
     background: white;
     padding: 14px;
@@ -19,6 +36,7 @@ body {
         0 2px 10px rgba(0, 0, 0, .08);
 }
 
+/* 模式选择卡片 & 配置卡片：统一的白色圆角卡片样式 */
 .mode-card,
 .config-card {
     background: white;
@@ -29,20 +47,24 @@ body {
         0 2px 10px rgba(0, 0, 0, .06);
 }
 
+/* 卡片标题 */
 .mode-title,
 .section-title {
     font-weight: 600;
     margin-bottom: 10px;
 }
 
+/* radio 选项之间的间距 */
 .radio-label {
     margin-right: 20px;
 }
 
+/* 随机模式下的行间距 */
 .row {
     margin-top: 10px;
 }
 
+/* 时间输入框：固定宽度，圆角边框 */
 input[type=number] {
     width: 58px;
     padding: 6px;
@@ -50,6 +72,11 @@ input[type=number] {
     border-radius: 8px;
 }
 
+/* ============================================================
+   主操作按钮
+   ============================================================ */
+
+/* 按钮基础样式：全宽、圆角、粗体、过渡动画 */
 button {
     width: 100%;
     height: 32px;
@@ -61,6 +88,7 @@ button {
     transition: .2s;
 }
 
+/* 启动按钮：蓝色主题 */
 #startBtn {
     background: #1677ff;
     color: white;
@@ -70,21 +98,29 @@ button {
     background: #4096ff;
 }
 
+/* 停止当前按钮：黄色/琥珀色主题 */
 #stopBtn {
     background: #faad14;
     color: white;
 }
 
+/* 停止全部按钮：红色主题，传达危险操作语义 */
 #stopAllBtn {
     background: #ff4d4f;
     color: white;
 }
 
+/* ============================================================
+   任务列表 & 任务卡片
+   ============================================================ */
+
+/* 任务列表区块标题 */
 .task-header {
     margin-top: 16px;
     font-weight: 600;
 }
 
+/* 单个任务卡片：白色背景、圆角、阴影 */
 .task {
     background: white;
     border-radius: 12px;
@@ -94,11 +130,13 @@ button {
         0 2px 10px rgba(0, 0, 0, .06);
 }
 
+/* 任务状态指示：绿色文字表示运行中 */
 .task-status {
     font-weight: 600;
     color: #52c41a;
 }
 
+/* 任务主机名显示：灰色小字，长域名自动换行 */
 .task-host {
     margin-top: 4px;
     color: #666;
@@ -106,6 +144,7 @@ button {
     word-break: break-all;
 }
 
+/* 倒计时数字：蓝色加粗，突出显示 */
 .task-countdown {
     margin-top: 8px;
     color: #1677ff;
@@ -113,18 +152,21 @@ button {
     font-size: 14px;
 }
 
+/* 下次刷新时间：浅灰色小字 */
 .task-next {
     margin-top: 4px;
     color: #888;
     font-size: 12px;
 }
 
+/* 任务操作按钮容器：flex 布局，按钮均分宽度 */
 .task-actions {
     display: flex;
     gap: 8px;
     margin-top: 10px;
 }
 
+/* 任务卡片内的小按钮 */
 .task-btn {
     flex: 1;
     height: 30px;
@@ -134,37 +176,46 @@ button {
     font-size: 12px;
 }
 
+/* 编辑按钮：蓝色 */
 .edit-btn {
     background: #1677ff;
     color: white;
 }
 
+/* 停止按钮：红色 */
 .stop-task-btn {
     background: #ff4d4f;
     color: white;
 }
 
-/* ---- 编辑面板 ---- */
+/* ============================================================
+   编辑面板（内嵌于任务卡片中）
+   ============================================================ */
 
+/* 编辑面板容器：顶部有分割线，与任务信息区分 */
 .edit-panel {
     margin-top: 10px;
     padding-top: 10px;
     border-top: 1px solid #eee;
 }
 
+/* 编辑面板中的输入框稍窄 */
 .edit-panel input {
     width: 50px;
 }
 
+/* 编辑模式选择行 */
 .edit-mode-row {
     margin-bottom: 8px;
 }
 
+/* 固定/随机时间编辑区域 */
 .edit-fixed-box,
 .edit-random-box {
     margin: 6px 0;
 }
 
+/* 保存/取消按钮行：居中排列 */
 .edit-sub-actions {
     display: flex;
     justify-content: center;
@@ -172,6 +223,7 @@ button {
     margin-top: 10px;
 }
 
+/* 保存按钮：蓝色，固定宽度 */
 .edit-save-btn {
     flex: none;
     width: 80px;
@@ -181,6 +233,7 @@ button {
     color: white;
 }
 
+/* 取消按钮：灰色，固定宽度 */
 .edit-cancel-btn {
     flex: none;
     width: 80px;

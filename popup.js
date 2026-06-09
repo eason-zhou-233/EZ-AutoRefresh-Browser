@@ -1,25 +1,56 @@
+/**
+ * EZ AutoRefresh - 弹出窗口交互脚本
+ * ===================================
+ * 负责 popup.html 中所有用户交互逻辑：
+ * 1. 模式切换（固定/随机刷新）
+ * 2. 任务的启动、停止、编辑
+ * 3. 任务列表的渲染与倒计时实时更新
+ * 4. 与 background.js 通过 chrome.runtime.sendMessage 通信
+ */
+
+// ---------- DOM 快捷访问 ----------
+
+/** 简写 document.getElementById，减少重复代码 */
 const $ = id => document.getElementById(id);
 
-// 主表单输入框快捷引用
-const fixedHour = $("fixed-hour");
-const fixedMinute = $("fixed-minute");
-const fixedSecond = $("fixed-second");
-const minHour = $("min-hour");
-const minMinute = $("min-minute");
-const minSecond = $("min-second");
-const maxHour = $("max-hour");
-const maxMinute = $("max-minute");
-const maxSecond = $("max-second");
+// 主表单输入框快捷引用 —— 用于读取用户在 popup 中设置的时间参数
+const fixedHour = $("fixed-hour");       // 固定模式 - 小时
+const fixedMinute = $("fixed-minute");   // 固定模式 - 分钟
+const fixedSecond = $("fixed-second");   // 固定模式 - 秒
+const minHour = $("min-hour");           // 随机模式 - 最小时
+const minMinute = $("min-minute");       // 随机模式 - 最小分
+const minSecond = $("min-second");       // 随机模式 - 最小秒
+const maxHour = $("max-hour");           // 随机模式 - 最大时
+const maxMinute = $("max-minute");       // 随机模式 - 最大分
+const maxSecond = $("max-second");       // 随机模式 - 最大秒
 
+// ---------- 全局状态 ----------
+
+/** 当前所有活跃任务的本地缓存（从 background 同步） */
 let currentTasks = {};
+/** 当前正在编辑的任务 tabId，null 表示无任务处于编辑状态 */
 let editingTaskId = null;
 
 // ---------- 工具函数 ----------
 
+/**
+ * 将时/分/秒转换为总秒数
+ * @param {number|string} h - 小时
+ * @param {number|string} m - 分钟
+ * @param {number|string} s - 秒
+ * @returns {number} 总秒数
+ */
 function toSeconds(h, m, s) {
     return Number(h) * 3600 + Number(m) * 60 + Number(s);
 }
 
+/**
+ * 将毫秒数格式化为 HH:MM:SS 倒计时格式
+ * - 若已过期（ms <= 0），返回 "即将刷新"
+ * - 否则返回补零的时:分:秒格式
+ * @param {number} ms - 剩余毫秒数
+ * @returns {string} 格式化后的倒计时字符串
+ */
 function formatRemain(ms) {
     if (ms <= 0) return "即将刷新";
     const total = Math.floor(ms / 1000);
@@ -29,6 +60,12 @@ function formatRemain(ms) {
     return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
 }
 
+/**
+ * 将总秒数拆解为 {h, m, s} 对象
+ * 用于编辑面板中还原时/分/秒输入框的默认值
+ * @param {number} totalSec - 总秒数
+ * @returns {{h: number, m: number, s: number}}
+ */
 function secondsToHMS(totalSec) {
     return {
         h: Math.floor(totalSec / 3600),
@@ -37,7 +74,13 @@ function secondsToHMS(totalSec) {
     };
 }
 
-/** 将秒数格式化为简洁中文时间，如 "4分30秒" */
+/**
+ * 将秒数格式化为简洁中文时间，如 "4分30秒"
+ * - 自动省略为0的单位（但至少显示秒）
+ * - 用于任务卡片中的间隔描述
+ * @param {number} totalSec - 总秒数
+ * @returns {string} 中文格式的时间描述
+ */
 function formatInterval(totalSec) {
     if (!totalSec && totalSec !== 0) return "";
     const h = Math.floor(totalSec / 3600);
@@ -52,6 +95,12 @@ function formatInterval(totalSec) {
 
 // ---------- 主表单模式切换 ----------
 
+/**
+ * 监听刷新模式的 radio 切换
+ * - "fixed" 模式下显示固定时间输入区域
+ * - "random" 模式下显示随机时间范围输入区域
+ * - 通过控制对应 DOM 元素的 display 属性实现切换
+ */
 document.querySelectorAll("input[name=mode]").forEach(el => {
     el.addEventListener("change", () => {
         const mode = document.querySelector("input[name=mode]:checked").value;
@@ -62,11 +111,18 @@ document.querySelectorAll("input[name=mode]").forEach(el => {
 
 // ---------- 数据加载 ----------
 
+/**
+ * 从 background 加载所有数据并渲染任务列表
+ * - 同时发起 getTasks 和 stats 两个请求
+ * - 两个请求都完成后才调用 renderTasks() 渲染
+ * - 设有 3 秒超时兜底，防止 background 无响应时界面永远空白
+ * @returns {Promise<void>}
+ */
 async function loadAllData() {
     return new Promise(resolve => {
-        let tasksDone = false;
-        let statsDone = false;
-        let settled = false;
+        let tasksDone = false;   // getTasks 是否完成
+        let statsDone = false;   // stats 是否完成
+        let settled = false;     // 是否已 resolve（防止重复）
 
         const tryResolve = () => {
             if (!settled && tasksDone && statsDone) {
@@ -75,12 +131,14 @@ async function loadAllData() {
             }
         };
 
+        // 请求所有任务数据
         chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
             currentTasks = tasks || {};
             tasksDone = true;
             tryResolve();
         });
 
+        // 请求任务数量统计
         chrome.runtime.sendMessage({ action: "stats" }, data => {
             $("status").innerText = `当前运行任务：${data?.count || 0}`;
             statsDone = true;
@@ -94,12 +152,22 @@ async function loadAllData() {
     }).then(() => renderTasks());
 }
 
+/**
+ * 刷新整个视图（重新加载数据并渲染）
+ */
 async function refreshView() {
     await loadAllData();
 }
 
 // ---------- 按钮事件 ----------
 
+/**
+ * "启动当前页面刷新" 按钮点击处理
+ * 1. 获取当前活动标签页
+ * 2. 根据用户选择的模式（固定/随机）构建配置对象
+ * 3. 将配置发送给 background 创建刷新任务
+ * 4. 完成后重新加载数据刷新界面
+ */
 $("startBtn").onclick = async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const mode = document.querySelector("input[name=mode]:checked").value;
@@ -114,31 +182,47 @@ $("startBtn").onclick = async () => {
     chrome.runtime.sendMessage({ action: "start", tabId: tab.id, url: tab.url, config }, () => loadAllData());
 };
 
+/**
+ * "停止当前页面刷新" 按钮点击处理
+ * 停止当前活动标签页对应的刷新任务
+ */
 $("stopBtn").onclick = async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     chrome.runtime.sendMessage({ action: "stop", tabId: tab.id }, () => loadAllData());
 };
 
+/**
+ * "停止全部任务" 按钮点击处理
+ * 一次性停止所有正在运行的刷新任务
+ */
 $("stopAllBtn").onclick = () => {
     chrome.runtime.sendMessage({ action: "stopAll" }, () => loadAllData());
 };
 
 // ---------- 编辑面板构建 ----------
 
+/**
+ * 根据任务配置构建编辑面板的 HTML 字符串
+ * - 根据任务当前模式（fixed/random）预设 radio 选中状态
+ * - 从任务配置中还原时/分/秒的默认值
+ * - 包含模式切换、时间输入、保存/取消按钮
+ * @param {Object} task - 要编辑的任务对象
+ * @returns {string} 编辑面板的 HTML 字符串
+ */
 function buildEditPanel(task) {
     const tabId = task.tabId;
     const isFixed = task.mode === "fixed";
 
-    // 从当前任务配置还原时/分/秒
-    let f = { h: 0, m: 3, s: 0 };
-    let rMin = { h: 0, m: 3, s: 0 };
-    let rMax = { h: 0, m: 5, s: 0 };
+    // 从当前任务配置还原时/分/秒默认值
+    let f = { h: 0, m: 3, s: 0 };       // 固定模式默认 3 分钟
+    let rMin = { h: 0, m: 3, s: 0 };    // 随机模式最小默认 3 分钟
+    let rMax = { h: 0, m: 5, s: 0 };    // 随机模式最大默认 5 分钟
 
     if (isFixed) {
-        f = secondsToHMS(task.interval || 300);
+        f = secondsToHMS(task.interval || 180);     // 固定模式默认 3 分钟
     } else {
-        rMin = secondsToHMS(task.min || 240);
-        rMax = secondsToHMS(task.max || 360);
+        rMin = secondsToHMS(task.min || 180);        // 随机模式最小默认 3 分钟
+        rMax = secondsToHMS(task.max || 300);        // 随机模式最大默认 5 分钟
     }
 
     return `
@@ -151,11 +235,13 @@ function buildEditPanel(task) {
                     <input type="radio" name="edit-mode-${tabId}" value="random" ${!isFixed ? "checked" : ""}> 随机时间
                 </label>
             </div>
+            <!-- 固定时间编辑区域：仅在 fixed 模式下显示 -->
             <div class="edit-fixed-box" id="edit-fixed-${tabId}" style="display:${isFixed ? "block" : "none"}">
                 <input id="edit-hour-${tabId}" type="number" min="0" value="${f.h}"> 时
                 <input id="edit-minute-${tabId}" type="number" min="0" value="${f.m}"> 分
                 <input id="edit-second-${tabId}" type="number" min="0" value="${f.s}"> 秒
             </div>
+            <!-- 随机时间编辑区域：仅在 random 模式下显示 -->
             <div class="edit-random-box" id="edit-random-${tabId}" style="display:${!isFixed ? "block" : "none"}">
                 <div>最小：
                     <input id="edit-min-hour-${tabId}" type="number" min="0" value="${rMin.h}"> 时
@@ -168,6 +254,7 @@ function buildEditPanel(task) {
                     <input id="edit-max-second-${tabId}" type="number" min="0" value="${rMax.s}"> 秒
                 </div>
             </div>
+            <!-- 编辑操作按钮 -->
             <div class="edit-sub-actions">
                 <button class="task-btn edit-save-btn" data-save="${tabId}">保存</button>
                 <button class="task-btn edit-cancel-btn" data-cancel="${tabId}">取消</button>
@@ -177,6 +264,13 @@ function buildEditPanel(task) {
 
 // ---------- 渲染任务列表 ----------
 
+/**
+ * 全量渲染任务列表
+ * - 清空容器后根据 currentTasks 重建所有任务卡片
+ * - 自动检测编辑状态：如果正在编辑的任务已被删除，清除编辑状态
+ * - 无任务时显示空状态提示
+ * - 渲染完成后绑定按钮事件
+ */
 function renderTasks() {
     const container = $("taskList");
 
@@ -194,9 +288,11 @@ function renderTasks() {
     }
 
     taskList.forEach(task => {
+        // 从任务 URL 中提取主机名用于显示
         const host = (() => {
             try { return new URL(task.url).hostname; } catch (e) { return task.url; }
         })();
+        // 计算距离下次刷新的剩余毫秒数
         const remain = (task.nextRunAt || Date.now()) - Date.now();
         const isEditing = editingTaskId === task.tabId;
 
@@ -223,8 +319,13 @@ function renderTasks() {
     bindTaskButtons();
 }
 
-/** 编辑状态下不整体重绘，只更新倒计时等动态文本 */
+/**
+ * 局部更新任务显示（不重绘整个列表）
+ * - 仅更新倒计时文本和下次刷新时间
+ * - 在编辑状态下使用此函数避免编辑面板被销毁
+ */
 function updateTaskDisplay() {
+    // 更新所有任务卡片的剩余时间倒计时
     document.querySelectorAll(".task-countdown").forEach(el => {
         const taskDiv = el.closest(".task");
         const tabId = Number(taskDiv?.dataset.taskId);
@@ -234,6 +335,7 @@ function updateTaskDisplay() {
             el.innerText = "剩余 " + formatRemain(remain);
         }
     });
+    // 更新所有任务卡片的下次刷新时间
     document.querySelectorAll(".task-next").forEach(el => {
         const taskDiv = el.closest(".task");
         const tabId = Number(taskDiv?.dataset.taskId);
@@ -246,8 +348,16 @@ function updateTaskDisplay() {
 
 // ---------- 事件绑定 ----------
 
+/**
+ * 为任务列表中的所有按钮绑定事件处理
+ * - data-stop: 停止任务
+ * - data-edit: 进入编辑模式
+ * - data-cancel: 取消编辑
+ * - data-save: 保存编辑（读取编辑面板中的值并发送 updateTask 消息）
+ * - 编辑面板内的模式切换 radio
+ */
 function bindTaskButtons() {
-    // 停止按钮
+    // 停止按钮：向 background 发送 stop 消息
     document.querySelectorAll("[data-stop]").forEach(btn => {
         btn.onclick = () => {
             chrome.runtime.sendMessage({ action: "stop", tabId: Number(btn.dataset.stop) }, () => {
@@ -257,7 +367,7 @@ function bindTaskButtons() {
         };
     });
 
-    // 编辑按钮
+    // 编辑按钮：设置 editingTaskId 并触发重绘以显示编辑面板
     document.querySelectorAll("[data-edit]").forEach(btn => {
         btn.onclick = () => {
             editingTaskId = Number(btn.dataset.edit);
@@ -265,7 +375,7 @@ function bindTaskButtons() {
         };
     });
 
-    // 取消按钮
+    // 取消按钮：清除编辑状态并重绘
     document.querySelectorAll("[data-cancel]").forEach(btn => {
         btn.onclick = () => {
             editingTaskId = null;
@@ -273,7 +383,7 @@ function bindTaskButtons() {
         };
     });
 
-    // 保存按钮
+    // 保存按钮：收集编辑面板中的配置值，发送 updateTask 消息
     document.querySelectorAll("[data-save]").forEach(btn => {
         btn.onclick = () => {
             const tabId = Number(btn.dataset.save);
@@ -282,11 +392,13 @@ function bindTaskButtons() {
 
             let config = { mode };
             if (mode === "fixed") {
+                // 读取固定模式下的时/分/秒
                 const h = Number(document.getElementById(`edit-hour-${tabId}`)?.value) || 0;
                 const m = Number(document.getElementById(`edit-minute-${tabId}`)?.value) || 0;
                 const s = Number(document.getElementById(`edit-second-${tabId}`)?.value) || 0;
                 config.interval = h * 3600 + m * 60 + s;
             } else {
+                // 读取随机模式下的最小/最大时/分/秒
                 const minH = Number(document.getElementById(`edit-min-hour-${tabId}`)?.value) || 0;
                 const minM = Number(document.getElementById(`edit-min-minute-${tabId}`)?.value) || 0;
                 const minS = Number(document.getElementById(`edit-min-second-${tabId}`)?.value) || 0;
@@ -304,7 +416,7 @@ function bindTaskButtons() {
         };
     });
 
-    // 编辑面板内模式切换
+    // 编辑面板内模式切换：在 fixed/random 之间切换时显示/隐藏对应输入区域
     document.querySelectorAll("input[name^='edit-mode-']").forEach(radio => {
         radio.addEventListener("change", function () {
             const tabId = this.name.replace("edit-mode-", "");
@@ -321,7 +433,12 @@ function bindTaskButtons() {
     });
 }
 
-/** 点击编辑时在任务卡片内插入编辑面板（保留其他任务不变） */
+/**
+ * 在任务卡片内插入编辑面板（保留其他任务不变）
+ * - 先移除已有编辑面板避免重复
+ * - 找到目标任务卡片，在操作按钮之前插入编辑面板 DOM
+ * - 完成后重新绑定按钮事件
+ */
 function renderEditPanel() {
     const container = $("taskList");
 
@@ -347,6 +464,13 @@ function renderEditPanel() {
 
 // ---------- 定时刷新倒计时 ----------
 
+/**
+ * 每秒执行一次的定时器，负责：
+ * 1. 每 3 秒从 background 同步一次最新任务数据
+ *    - 检测任务数量是否变化，变化时触发全量重绘
+ * 2. 每秒更新倒计时显示（局部更新，不重绘整个列表）
+ *    - 编辑状态下也仅更新动态文本，保护编辑面板不被销毁
+ */
 let tickCount = 0;
 setInterval(() => {
     tickCount++;
@@ -367,7 +491,7 @@ setInterval(() => {
         });
     }
 
-    // 编辑状态下不整体重绘，只更新动态文本
+    // 编辑状态下不整体重绘，只更新动态文本（倒计时和下次刷新时间）
     if (editingTaskId !== null) {
         updateTaskDisplay();
         return;
@@ -378,4 +502,5 @@ setInterval(() => {
 
 // ---------- 启动 ----------
 
+/** 页面加载完成后立即加载数据并渲染界面 */
 refreshView();
