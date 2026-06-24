@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "EZ AutoRefresh 页面刷新工具",
     "version": "1.0.0",
-    "description": "Powerful auto refresh extension for Chrome. Refresh pages at fixed or random intervals, manage multiple refresh tasks, monitor countdowns, and automatically restore tasks after browser restart.",
+    "description": "Auto refresh pages with fixed or random intervals. Manage tasks, monitor countdowns, and restore tasks automatically.",
     "permissions": [
         "tabs",
         "alarms",
