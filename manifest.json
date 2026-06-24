@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "EZ AutoRefresh 页面刷新工具",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Auto refresh pages with fixed or random intervals. Manage tasks, monitor countdowns, and restore tasks automatically.",
     "permissions": [
         "tabs",
