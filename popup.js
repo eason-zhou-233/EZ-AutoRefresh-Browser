@@ -13,17 +13,6 @@
 /** 简写 document.getElementById，减少重复代码 */
 const $ = id => document.getElementById(id);
 
-// 主表单输入框快捷引用 —— 用于读取用户在 popup 中设置的时间参数
-const fixedHour = $("fixed-hour");       // 固定模式 - 小时
-const fixedMinute = $("fixed-minute");   // 固定模式 - 分钟
-const fixedSecond = $("fixed-second");   // 固定模式 - 秒
-const minHour = $("min-hour");           // 随机模式 - 最小时
-const minMinute = $("min-minute");       // 随机模式 - 最小分
-const minSecond = $("min-second");       // 随机模式 - 最小秒
-const maxHour = $("max-hour");           // 随机模式 - 最大时
-const maxMinute = $("max-minute");       // 随机模式 - 最大分
-const maxSecond = $("max-second");       // 随机模式 - 最大秒
-
 // ---------- 全局状态 ----------
 
 /** 当前所有活跃任务的本地缓存（从 background 同步） */
@@ -42,6 +31,40 @@ let editingTaskId = null;
  */
 function toSeconds(h, m, s) {
     return Number(h) * 3600 + Number(m) * 60 + Number(s);
+}
+
+function showActionError(message = "") {
+    const error = $("action-error");
+    error.textContent = message;
+    error.hidden = !message;
+}
+
+function readRefreshConfig(mode, inputId) {
+    const seconds = group => {
+        const inputs = ["hour", "minute", "second"].map(unit => $(inputId(group, unit)));
+        if (!inputs.every(input => input?.checkValidity())) return null;
+        return toSeconds(...inputs.map(input => input.value));
+    };
+    const config = mode === "fixed"
+        ? { mode, interval: seconds("fixed") }
+        : { mode, min: seconds("min"), max: seconds("max") };
+    if (Object.values(config).includes(null)) {
+        showActionError("时、分、秒必须是非负整数。");
+        return null;
+    }
+    return config;
+}
+
+function requestTaskChange(message, onSuccess) {
+    showActionError();
+    chrome.runtime.sendMessage(message, response => {
+        const communicationError = chrome.runtime.lastError;
+        if (communicationError || !response?.success) {
+            showActionError(response?.error || "无法完成任务操作，请重试。");
+            return;
+        }
+        onSuccess();
+    });
 }
 
 /**
@@ -169,17 +192,16 @@ async function refreshView() {
  * 4. 完成后重新加载数据刷新界面
  */
 $("startBtn").onclick = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const mode = document.querySelector("input[name=mode]:checked").value;
-    const config = mode === "fixed"
-        ? { mode, interval: toSeconds(fixedHour.value, fixedMinute.value, fixedSecond.value) }
-        : {
-            mode,
-            min: toSeconds(minHour.value, minMinute.value, minSecond.value),
-            max: toSeconds(maxHour.value, maxMinute.value, maxSecond.value)
-        };
+    const config = readRefreshConfig(mode, (group, unit) => `${group}-${unit}`);
+    if (!config) return;
 
-    chrome.runtime.sendMessage({ action: "start", tabId: tab.id, url: tab.url, config }, () => loadAllData());
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!Number.isInteger(tab?.id) || tab.id < 0) {
+        showActionError("找不到当前标签页。");
+        return;
+    }
+    requestTaskChange({ action: "start", tabId: tab.id, url: tab.url, config }, loadAllData);
 };
 
 /**
@@ -371,6 +393,7 @@ function bindTaskButtons() {
     document.querySelectorAll("[data-edit]").forEach(btn => {
         btn.onclick = () => {
             editingTaskId = Number(btn.dataset.edit);
+            showActionError();
             renderTasks();
         };
     });
@@ -379,6 +402,7 @@ function bindTaskButtons() {
     document.querySelectorAll("[data-cancel]").forEach(btn => {
         btn.onclick = () => {
             editingTaskId = null;
+            showActionError();
             renderTasks();
         };
     });
@@ -390,26 +414,12 @@ function bindTaskButtons() {
             const modeRadio = document.querySelector(`input[name="edit-mode-${tabId}"]:checked`);
             const mode = modeRadio ? modeRadio.value : "fixed";
 
-            let config = { mode };
-            if (mode === "fixed") {
-                // 读取固定模式下的时/分/秒
-                const h = Number(document.getElementById(`edit-hour-${tabId}`)?.value) || 0;
-                const m = Number(document.getElementById(`edit-minute-${tabId}`)?.value) || 0;
-                const s = Number(document.getElementById(`edit-second-${tabId}`)?.value) || 0;
-                config.interval = h * 3600 + m * 60 + s;
-            } else {
-                // 读取随机模式下的最小/最大时/分/秒
-                const minH = Number(document.getElementById(`edit-min-hour-${tabId}`)?.value) || 0;
-                const minM = Number(document.getElementById(`edit-min-minute-${tabId}`)?.value) || 0;
-                const minS = Number(document.getElementById(`edit-min-second-${tabId}`)?.value) || 0;
-                const maxH = Number(document.getElementById(`edit-max-hour-${tabId}`)?.value) || 0;
-                const maxM = Number(document.getElementById(`edit-max-minute-${tabId}`)?.value) || 0;
-                const maxS = Number(document.getElementById(`edit-max-second-${tabId}`)?.value) || 0;
-                config.min = minH * 3600 + minM * 60 + minS;
-                config.max = maxH * 3600 + maxM * 60 + maxS;
-            }
+            const config = readRefreshConfig(mode, (group, unit) =>
+                `edit-${group === "fixed" ? "" : group + "-"}${unit}-${tabId}`
+            );
+            if (!config) return;
 
-            chrome.runtime.sendMessage({ action: "updateTask", tabId, config }, () => {
+            requestTaskChange({ action: "updateTask", tabId, config }, () => {
                 editingTaskId = null;
                 loadAllData();
             });

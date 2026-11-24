@@ -67,15 +67,15 @@
         </div>
         <div class="row">
             最小：
-            <input id="min-hour" type="number" value="0"> 时
-            <input id="min-minute" type="number" value="3"> 分
-            <input id="min-second" type="number" value="0"> 秒
+            <input id="min-hour" type="number" min="0" value="0"> 时
+            <input id="min-minute" type="number" min="0" value="3"> 分
+            <input id="min-second" type="number" min="0" value="0"> 秒
         </div>
         <div class="row">
             最大：
-            <input id="max-hour" type="number" value="0"> 时
-            <input id="max-minute" type="number" value="5"> 分
-            <input id="max-second" type="number" value="0"> 秒
+            <input id="max-hour" type="number" min="0" value="0"> 时
+            <input id="max-minute" type="number" min="0" value="5"> 分
+            <input id="max-second" type="number" min="0" value="0"> 秒
         </div>
 
     </div>
@@ -98,6 +98,8 @@
     <button id="stopAllBtn">
         停止全部任务
     </button>
+
+    <div id="action-error" role="alert" hidden></div>
 
     <!-- ============================================================
     任务列表区域

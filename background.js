@@ -62,12 +62,13 @@ async function loadTasks() {
         chrome.storage.local.get("tasks"),
         chrome.storage.session.get("taskSession")
     ]);
-    tasks = savedTasks;
+    const validTasks = Object.entries(savedTasks).filter(([, task]) => validatedConfig(task));
+    tasks = Object.fromEntries(validTasks);
+    if (!taskSession && validTasks.length > 0) tasks = await rebindTasks(tasks);
+    if (Object.keys(savedTasks).length !== validTasks.length || (!taskSession && validTasks.length > 0)) {
+        await save();
+    }
     if (!taskSession) {
-        if (Object.keys(savedTasks).length > 0) {
-            tasks = await rebindTasks(savedTasks);
-            await save();
-        }
         await chrome.storage.session.set({ taskSession: true });
     }
     try {
@@ -101,6 +102,19 @@ async function rebindTasks(savedTasks) {
  * 将当前 tasks 对象持久化保存到 chrome.storage.local
  */
 function save() { return chrome.storage.local.set({ tasks }); }
+
+function validatedConfig(config) {
+    const maxSeconds = Math.floor((8640000000000000 - Date.now()) / 1000);
+    const isValid = seconds => Number.isSafeInteger(seconds) && seconds > 0 && seconds <= maxSeconds;
+
+    if (config?.mode === "fixed" && isValid(config.interval)) {
+        return { mode: "fixed", interval: config.interval };
+    }
+    if (config?.mode === "random" && isValid(config.min) && isValid(config.max) && config.min <= config.max) {
+        return { mode: "random", min: config.min, max: config.max };
+    }
+    return null;
+}
 
 /**
  * 生成 [min, max] 范围内的随机整数，用于随机刷新模式
@@ -172,9 +186,15 @@ async function restoreTasks() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 所有需要读取 tasks 的操作都等待初始化完成
     onReady(() => {
+        const changesConfig = msg.action === "start" || msg.action === "updateTask";
+        const config = changesConfig ? validatedConfig(msg.config) : null;
+        if (changesConfig && !config) {
+            sendResponse({ success: false, error: "刷新间隔必须是有效的正整数秒，随机最小值不能超过最大值。" });
+            return;
+        }
         if (msg.action === "start") {
             // 创建新任务并开始调度
-            tasks[msg.tabId] = { tabId: msg.tabId, url: msg.url, ...msg.config };
+            tasks[msg.tabId] = { tabId: msg.tabId, url: msg.url, ...config };
             schedule(tasks[msg.tabId]);
             sendResponse({ success: true });
         }
@@ -199,8 +219,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         else if (msg.action === "updateTask") {
             // 更新任务配置：合并新配置，重新调度 alarm
             const task = tasks[msg.tabId];
-            if (!task) { sendResponse({ success: false }); return; }
-            const updatedTask = { ...task, ...msg.config };
+            if (!task) { sendResponse({ success: false, error: "该刷新任务已停止。" }); return; }
+            const updatedTask = { tabId: task.tabId, url: task.url, ...config };
             tasks[msg.tabId] = updatedTask;
             schedule(updatedTask);
             sendResponse({ success: true });
