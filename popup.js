@@ -134,52 +134,17 @@ document.querySelectorAll("input[name=mode]").forEach(el => {
 
 // ---------- 数据加载 ----------
 
-/**
- * 从 background 加载所有数据并渲染任务列表
- * - 同时发起 getTasks 和 stats 两个请求
- * - 两个请求都完成后才调用 renderTasks() 渲染
- * - 设有 3 秒超时兜底，防止 background 无响应时界面永远空白
- * @returns {Promise<void>}
- */
-async function loadAllData() {
-    return new Promise(resolve => {
-        let tasksDone = false;   // getTasks 是否完成
-        let statsDone = false;   // stats 是否完成
-        let settled = false;     // 是否已 resolve（防止重复）
+// 每次同步只取一个快照，让任务列表和运行数量始终来自同一份数据。
+let lastRequest = 0;
 
-        const tryResolve = () => {
-            if (!settled && tasksDone && statsDone) {
-                settled = true;
-                resolve();
-            }
-        };
-
-        // 请求所有任务数据
-        chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
-            currentTasks = tasks || {};
-            tasksDone = true;
-            tryResolve();
-        });
-
-        // 请求任务数量统计
-        chrome.runtime.sendMessage({ action: "stats" }, data => {
-            $("status").innerText = `当前运行任务：${data?.count || 0}`;
-            statsDone = true;
-            tryResolve();
-        });
-
-        // 兜底超时：防止 background 响应过慢导致永远不渲染
-        setTimeout(() => {
-            if (!settled) { settled = true; resolve(); }
-        }, 3000);
-    }).then(() => renderTasks());
-}
-
-/**
- * 刷新整个视图（重新加载数据并渲染）
- */
-async function refreshView() {
-    await loadAllData();
+function loadAllData() {
+    const request = ++lastRequest;
+    chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
+        const communicationError = chrome.runtime.lastError;
+        if (request !== lastRequest || communicationError || !tasks) return;
+        currentTasks = tasks;
+        renderTasks();
+    });
 }
 
 // ---------- 按钮事件 ----------
@@ -286,231 +251,123 @@ function buildEditPanel(task) {
 
 // ---------- 渲染任务列表 ----------
 
-/**
- * 全量渲染任务列表
- * - 清空容器后根据 currentTasks 重建所有任务卡片
- * - 自动检测编辑状态：如果正在编辑的任务已被删除，清除编辑状态
- * - 无任务时显示空状态提示
- * - 渲染完成后绑定按钮事件
- */
 function renderTasks() {
     const container = $("taskList");
+    const tasks = Object.values(currentTasks);
+    const cards = new Map([...container.querySelectorAll(".task[data-task-id]")]
+        .map(card => [Number(card.dataset.taskId), card]));
 
-    // 如果编辑中的任务已被后台删除（如被停止），自动清除编辑状态
-    if (editingTaskId !== null && !currentTasks[editingTaskId]) {
+    if (editingTaskId !== null && !currentTasks[editingTaskId]) editingTaskId = null;
+    $("status").innerText = `当前运行任务：${tasks.length}`;
+    $("emptyTasks").hidden = tasks.length > 0;
+
+    for (const [tabId, card] of cards) {
+        if (!currentTasks[tabId]) card.remove();
+    }
+    for (const task of tasks) {
+        let card = cards.get(task.tabId);
+        if (!card) {
+            card = createTaskCard(task.tabId);
+            container.appendChild(card);
+        }
+        updateTaskCard(card, task);
+    }
+}
+
+function createTaskCard(tabId) {
+    const card = document.createElement("div");
+    card.className = "task";
+    card.dataset.taskId = tabId;
+    card.innerHTML = `
+        <div class="task-status">🟢 正在运行</div>
+        <div class="task-host"></div>
+        <div class="task-config"></div>
+        <div class="task-countdown"></div>
+        <div class="task-next"></div>
+        <div class="task-actions">
+            <button class="task-btn edit-btn">编辑</button>
+            <button class="task-btn stop-task-btn">停止</button>
+        </div>`;
+
+    const editButton = card.querySelector(".edit-btn");
+    editButton.dataset.edit = tabId;
+    editButton.onclick = () => {
+        editingTaskId = tabId;
+        showActionError();
+        renderTasks();
+    };
+    const stopButton = card.querySelector(".stop-task-btn");
+    stopButton.dataset.stop = tabId;
+    stopButton.onclick = () => {
+        chrome.runtime.sendMessage({ action: "stop", tabId }, loadAllData);
+    };
+    return card;
+}
+
+function updateTaskCard(card, task) {
+    let host;
+    try { host = new URL(task.url).hostname; }
+    catch { host = task.url; }
+    card.querySelector(".task-host").textContent = host ?? "";
+    card.querySelector(".task-config").textContent = task.mode === "fixed"
+        ? `固定刷新（${formatInterval(task.interval)}）`
+        : `随机刷新（${formatInterval(task.min)} ~ ${formatInterval(task.max)}）`;
+
+    updateTaskTiming(card, task);
+    const panel = card.querySelector(".edit-panel");
+    if (editingTaskId === task.tabId && !panel) {
+        const actions = card.querySelector(".task-actions");
+        actions.insertAdjacentHTML("beforebegin", buildEditPanel(task));
+        bindEditPanel(actions.previousElementSibling, task.tabId);
+    } else if (editingTaskId !== task.tabId) {
+        panel?.remove();
+    }
+}
+
+function updateTaskTiming(card, task) {
+    const remain = (task.nextRunAt || Date.now()) - Date.now();
+    card.querySelector(".task-countdown").innerText = "剩余 " + formatRemain(remain);
+    card.querySelector(".task-next").innerText = "下次刷新：" + new Date(task.nextRunAt).toLocaleTimeString();
+}
+
+function bindEditPanel(panel, tabId) {
+    panel.querySelector("[data-cancel]").onclick = () => {
         editingTaskId = null;
-    }
+        showActionError();
+        renderTasks();
+    };
+    panel.querySelector("[data-save]").onclick = () => {
+        const mode = panel.querySelector("input[type=radio]:checked").value;
+        const config = readRefreshConfig(mode, (group, unit) =>
+            `edit-${group === "fixed" ? "" : group + "-"}${unit}-${tabId}`
+        );
+        if (!config) return;
 
-    container.innerHTML = "";
-
-    const taskList = Object.values(currentTasks);
-    if (taskList.length === 0) {
-        container.innerHTML = '<div class="task" style="text-align:center;color:#999;">当前没有运行中的任务</div>';
-        return;
-    }
-
-    taskList.forEach(task => {
-        // 从任务 URL 中提取主机名用于显示
-        const host = (() => {
-            try { return new URL(task.url).hostname; } catch (e) { return task.url; }
-        })();
-        // 计算距离下次刷新的剩余毫秒数
-        const remain = (task.nextRunAt || Date.now()) - Date.now();
-        const isEditing = editingTaskId === task.tabId;
-
-        const div = document.createElement("div");
-        div.className = "task";
-        div.dataset.taskId = task.tabId;
-
-        div.innerHTML = `
-            <div class="task-status">🟢 正在运行</div>
-            <div class="task-host">${host}</div>
-            <div>${task.mode === "fixed" ? `固定刷新（${formatInterval(task.interval)}）` : `随机刷新（${formatInterval(task.min)} ~ ${formatInterval(task.max)}）`}</div>
-            <div class="task-countdown">剩余 ${formatRemain(remain)}</div>
-            <div class="task-next">下次刷新：${new Date(task.nextRunAt).toLocaleTimeString()}</div>
-            ${isEditing ? buildEditPanel(task) : ""}
-            <div class="task-actions">
-                <button class="task-btn edit-btn" data-edit="${task.tabId}">编辑</button>
-                <button class="task-btn stop-task-btn" data-stop="${task.tabId}">停止</button>
-            </div>
-        `;
-
-        container.appendChild(div);
-    });
-
-    bindTaskButtons();
-}
-
-/**
- * 局部更新任务显示（不重绘整个列表）
- * - 仅更新倒计时文本和下次刷新时间
- * - 在编辑状态下使用此函数避免编辑面板被销毁
- */
-function updateTaskDisplay() {
-    // 更新所有任务卡片的剩余时间倒计时
-    document.querySelectorAll(".task-countdown").forEach(el => {
-        const taskDiv = el.closest(".task");
-        const tabId = Number(taskDiv?.dataset.taskId);
-        const task = currentTasks[tabId];
-        if (task) {
-            const remain = (task.nextRunAt || Date.now()) - Date.now();
-            el.innerText = "剩余 " + formatRemain(remain);
-        }
-    });
-    // 更新所有任务卡片的下次刷新时间
-    document.querySelectorAll(".task-next").forEach(el => {
-        const taskDiv = el.closest(".task");
-        const tabId = Number(taskDiv?.dataset.taskId);
-        const task = currentTasks[tabId];
-        if (task) {
-            el.innerText = "下次刷新：" + new Date(task.nextRunAt).toLocaleTimeString();
-        }
-    });
-}
-
-// ---------- 事件绑定 ----------
-
-/**
- * 为任务列表中的所有按钮绑定事件处理
- * - data-stop: 停止任务
- * - data-edit: 进入编辑模式
- * - data-cancel: 取消编辑
- * - data-save: 保存编辑（读取编辑面板中的值并发送 updateTask 消息）
- * - 编辑面板内的模式切换 radio
- */
-function bindTaskButtons() {
-    // 停止按钮：向 background 发送 stop 消息
-    document.querySelectorAll("[data-stop]").forEach(btn => {
-        btn.onclick = () => {
-            chrome.runtime.sendMessage({ action: "stop", tabId: Number(btn.dataset.stop) }, () => {
+        requestTaskChange({ action: "updateTask", tabId, config }, () => {
+            if (editingTaskId === tabId) {
                 editingTaskId = null;
-                loadAllData();
-            });
-        };
-    });
-
-    // 编辑按钮：设置 editingTaskId 并触发重绘以显示编辑面板
-    document.querySelectorAll("[data-edit]").forEach(btn => {
-        btn.onclick = () => {
-            editingTaskId = Number(btn.dataset.edit);
-            showActionError();
-            renderTasks();
-        };
-    });
-
-    // 取消按钮：清除编辑状态并重绘
-    document.querySelectorAll("[data-cancel]").forEach(btn => {
-        btn.onclick = () => {
-            editingTaskId = null;
-            showActionError();
-            renderTasks();
-        };
-    });
-
-    // 保存按钮：收集编辑面板中的配置值，发送 updateTask 消息
-    document.querySelectorAll("[data-save]").forEach(btn => {
-        btn.onclick = () => {
-            const tabId = Number(btn.dataset.save);
-            const modeRadio = document.querySelector(`input[name="edit-mode-${tabId}"]:checked`);
-            const mode = modeRadio ? modeRadio.value : "fixed";
-
-            const config = readRefreshConfig(mode, (group, unit) =>
-                `edit-${group === "fixed" ? "" : group + "-"}${unit}-${tabId}`
-            );
-            if (!config) return;
-
-            requestTaskChange({ action: "updateTask", tabId, config }, () => {
-                editingTaskId = null;
-                loadAllData();
-            });
-        };
-    });
-
-    // 编辑面板内模式切换：在 fixed/random 之间切换时显示/隐藏对应输入区域
-    document.querySelectorAll("input[name^='edit-mode-']").forEach(radio => {
-        radio.addEventListener("change", function () {
-            const tabId = this.name.replace("edit-mode-", "");
-            const editFixed = document.getElementById(`edit-fixed-${tabId}`);
-            const editRandom = document.getElementById(`edit-random-${tabId}`);
-            if (this.value === "fixed") {
-                if (editFixed) editFixed.style.display = "block";
-                if (editRandom) editRandom.style.display = "none";
-            } else {
-                if (editFixed) editFixed.style.display = "none";
-                if (editRandom) editRandom.style.display = "block";
+                renderTasks();
             }
+            loadAllData();
+        });
+    };
+    panel.querySelectorAll("input[type=radio]").forEach(radio => {
+        radio.addEventListener("change", () => {
+            const fixed = radio.value === "fixed";
+            panel.querySelector(".edit-fixed-box").style.display = fixed ? "block" : "none";
+            panel.querySelector(".edit-random-box").style.display = fixed ? "none" : "block";
         });
     });
 }
 
-/**
- * 在任务卡片内插入编辑面板（保留其他任务不变）
- * - 先移除已有编辑面板避免重复
- * - 找到目标任务卡片，在操作按钮之前插入编辑面板 DOM
- * - 完成后重新绑定按钮事件
- */
-function renderEditPanel() {
-    const container = $("taskList");
-
-    // 先移除已有的编辑面板
-    const oldPanel = container.querySelector(".edit-panel");
-    if (oldPanel) oldPanel.remove();
-
-    // 找到目标任务卡片并插入编辑面板
-    const taskDiv = container.querySelector(`.task[data-task-id="${editingTaskId}"]`);
-    const task = currentTasks[editingTaskId];
-    if (!taskDiv || !task) return;
-
-    // 在操作按钮之前插入编辑面板
-    const actions = taskDiv.querySelector(".task-actions");
-    const panelDiv = document.createElement("div");
-    panelDiv.innerHTML = buildEditPanel(task);
-    if (actions) {
-        taskDiv.insertBefore(panelDiv.firstElementChild, actions);
-    }
-
-    bindTaskButtons();
-}
-
-// ---------- 定时刷新倒计时 ----------
-
-/**
- * 每秒执行一次的定时器，负责：
- * 1. 每 3 秒从 background 同步一次最新任务数据
- *    - 检测任务数量是否变化，变化时触发全量重绘
- * 2. 每秒更新倒计时显示（局部更新，不重绘整个列表）
- *    - 编辑状态下也仅更新动态文本，保护编辑面板不被销毁
- */
+// 每 3 秒同步任务，每秒更新现有卡片的时间，保留编辑面板和输入焦点。
 let tickCount = 0;
 setInterval(() => {
-    tickCount++;
-
-    // 每 3 秒从 background 同步一次最新任务数据，确保倒计时在页面刷新后能更新
-    if (tickCount % 3 === 0) {
-        chrome.runtime.sendMessage({ action: "getTasks" }, tasks => {
-            if (tasks) {
-                currentTasks = tasks;
-                // 任务数量变化时全量重绘（编辑中仍允许重绘，renderTasks 会自动处理编辑状态）
-                const container = $("taskList");
-                const domTaskCount = container.querySelectorAll(".task[data-task-id]").length;
-                const newTaskCount = Object.keys(tasks).length;
-                if (domTaskCount !== newTaskCount) {
-                    renderTasks();
-                }
-            }
-        });
+    if (++tickCount % 3 === 0) loadAllData();
+    for (const card of $("taskList").querySelectorAll(".task[data-task-id]")) {
+        const task = currentTasks[Number(card.dataset.taskId)];
+        if (task) updateTaskTiming(card, task);
     }
-
-    // 编辑状态下不整体重绘，只更新动态文本（倒计时和下次刷新时间）
-    if (editingTaskId !== null) {
-        updateTaskDisplay();
-        return;
-    }
-    // 非编辑状态下也不整体重绘，只更新动态文本
-    updateTaskDisplay();
 }, 1000);
 
-// ---------- 启动 ----------
-
-/** 页面加载完成后立即加载数据并渲染界面 */
-refreshView();
+loadAllData();
