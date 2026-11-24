@@ -16,6 +16,7 @@
 // tasks 对象：以 tabId 为键存储所有活跃的刷新任务
 // 每个任务包含：tabId, url, mode(fixed|random), interval/min/max, nextRunAt
 let tasks = {};
+const refreshingTasks = new WeakSet();
 
 // ============================================================
 // Service Worker 就绪机制
@@ -61,10 +62,15 @@ function setReady() {
  * 然后调用 restoreTasks() 重新注册所有 alarm，
  * 最后通过 setReady() 允许 popup 消息处理。
  */
-chrome.storage.local.get(["tasks"], d => {
-    tasks = d.tasks || {};
-    restoreTasks();
-    setReady();
+chrome.storage.local.get(["tasks"], async d => {
+    tasks = d?.tasks || {};
+    try {
+        await restoreTasks();
+    } catch (error) {
+        console.error("恢复刷新闹钟失败", error);
+    } finally {
+        setReady();
+    }
 });
 
 /**
@@ -98,15 +104,21 @@ function schedule(task) {
 /**
  * 恢复所有持久化任务
  * - 遍历 tasks 中所有任务
- * - 清除旧 alarm（避免重复）
- * - 如果 nextRunAt 已过期（如浏览器重启后），立即重新调度
- * - 如果 nextRunAt 仍在未来，按原定时间重建 alarm
+ * - 保留仍有效的 alarm，只补建缺失的调度
+ * - 保留原定时间，让已到期的任务尽快刷新
  */
-function restoreTasks() {
-    Object.values(tasks).forEach(t => {
-        chrome.alarms.clear(`refresh_${t.tabId}`);
-        if (!t.nextRunAt || t.nextRunAt <= Date.now()) schedule(t);
-        else chrome.alarms.create(`refresh_${t.tabId}`, { when: t.nextRunAt });
+async function restoreTasks() {
+    if (Object.keys(tasks).length === 0) return;
+    const alarms = new Map((await chrome.alarms.getAll()).map(alarm => [alarm.name, alarm]));
+    const results = await Promise.allSettled(Object.values(tasks).map(task => {
+        const name = `refresh_${task.tabId}`;
+        if (!Number.isFinite(task.nextRunAt)) return schedule(task);
+        if (alarms.get(name)?.scheduledTime !== task.nextRunAt) {
+            return chrome.alarms.create(name, { when: task.nextRunAt });
+        }
+    }));
+    results.forEach(result => {
+        if (result.status === "rejected") console.error("恢复刷新闹钟失败", result.reason);
     });
 }
 
@@ -183,13 +195,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
  * - 刷新成功后重新调度下一次
  * - 如果标签页已不存在（如被用户关闭），则自动清理任务
  */
-chrome.alarms.onAlarm.addListener(async a => {
+chrome.alarms.onAlarm.addListener(a => {
     if (!a.name.startsWith("refresh_")) return;
-    const tabId = Number(a.name.replace("refresh_", ""));
-    const task = tasks[tabId];
-    if (!task) return;
-    try { await chrome.tabs.reload(tabId); schedule(task); }
-    catch (e) { delete tasks[tabId]; save(); }
+    onReady(async () => {
+        const tabId = Number(a.name.replace("refresh_", ""));
+        const task = tasks[tabId];
+        if (!task || task.nextRunAt !== a.scheduledTime || refreshingTasks.has(task)) return;
+        refreshingTasks.add(task);
+        try { await chrome.tabs.reload(tabId); schedule(task); }
+        catch (e) { delete tasks[tabId]; save(); }
+        finally { refreshingTasks.delete(task); }
+    });
 });
 
 // ============================================================
@@ -201,5 +217,7 @@ chrome.alarms.onAlarm.addListener(async a => {
  * 避免后台继续维护无效任务。
  */
 chrome.tabs.onRemoved.addListener(tabId => {
-    if (tasks[tabId]) { delete tasks[tabId]; chrome.alarms.clear(`refresh_${tabId}`); save(); }
+    onReady(() => {
+        if (tasks[tabId]) { delete tasks[tabId]; chrome.alarms.clear(`refresh_${tabId}`); save(); }
+    });
 });
