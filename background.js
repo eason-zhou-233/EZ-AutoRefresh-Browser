@@ -234,7 +234,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // 保持消息通道开启以异步响应
 });
 
-async function handleMessage({ action, tabId, url, config }) {
+async function handleMessage({ action, tabId, config }) {
     switch (action) {
         case "getTasks":
             return tasks;
@@ -246,11 +246,13 @@ async function handleMessage({ action, tabId, url, config }) {
             if (!settings) {
                 return { success: false, error: "刷新间隔必须是有效的正整数秒，随机最小值不能超过最大值。" };
             }
+            let url;
             if (action === "start") {
                 const tab = Number.isInteger(tabId) && tabId >= 0
                     ? await chrome.tabs.get(tabId).catch(() => null)
                     : null;
                 if (!tab) return { success: false, error: "找不到要刷新的标签页。" };
+                url = tab.url || tab.pendingUrl || "";
             } else {
                 const task = tasks[tabId];
                 if (!task) return { success: false, error: "该刷新任务已停止。" };
@@ -320,4 +322,16 @@ chrome.alarms.onAlarm.addListener(a => {
  */
 chrome.tabs.onRemoved.addListener(tabId => {
     onReady(() => queueTaskChange(() => removeTask(tabId)));
+});
+
+// 任务跟随标签页。导航后同步最新网址，保留当前刷新计划。
+chrome.tabs.onUpdated.addListener((tabId, { url }) => {
+    if (!url) return;
+    onReady(() => queueTaskChange(async () => {
+        const task = tasks[tabId];
+        if (!task || task.url === url) return;
+        await save({ ...tasks, [tabId]: { ...task, url } });
+        // 保留任务对象，使执行中的刷新仍能安排下一次闹钟。
+        task.url = url;
+    }));
 });

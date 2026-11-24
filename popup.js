@@ -177,7 +177,7 @@ $("startBtn").onclick = async () => {
     if (!config) return;
 
     const tab = await getActiveTab();
-    if (tab) requestTaskChange({ action: "start", tabId: tab.id, url: tab.url, config });
+    if (tab) requestTaskChange({ action: "start", tabId: tab.id, config });
 };
 
 /**
@@ -315,9 +315,13 @@ function createTaskCard(tabId) {
 
 function updateTaskCard(card, task) {
     let host;
-    try { host = new URL(task.url).hostname; }
-    catch { host = task.url; }
-    card.querySelector(".task-host").textContent = host ?? "";
+    try {
+        const url = new URL(task.url);
+        host = url.hostname || url.protocol;
+    } catch {
+        host = task.url || "当前标签页";
+    }
+    card.querySelector(".task-host").textContent = host;
     card.querySelector(".task-config").textContent = task.mode === "fixed"
         ? `固定刷新（${formatInterval(task.interval)}）`
         : `随机刷新（${formatInterval(task.min)} ~ ${formatInterval(task.max)}）`;
