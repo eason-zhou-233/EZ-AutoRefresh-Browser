@@ -55,16 +55,31 @@ function readRefreshConfig(mode, inputId) {
     return config;
 }
 
-function requestTaskChange(message, onSuccess) {
+async function requestTaskChange(message, onSuccess = loadAllData) {
     showActionError();
-    chrome.runtime.sendMessage(message, response => {
-        const communicationError = chrome.runtime.lastError;
-        if (communicationError || !response?.success) {
-            showActionError(response?.error || "无法完成任务操作，请重试。");
-            return;
-        }
-        onSuccess();
-    });
+    let response;
+    try {
+        response = await chrome.runtime.sendMessage(message);
+    } catch {
+        showActionError("无法连接刷新后台，请重试。");
+        return;
+    }
+    if (!response?.success) {
+        showActionError(response?.error || "无法完成任务操作，请重试。");
+        return;
+    }
+    onSuccess();
+}
+
+async function getActiveTab() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (Number.isInteger(tab?.id) && tab.id >= 0) return tab;
+    } catch {
+        // 查询失败时也显示操作错误。
+    }
+    showActionError("找不到当前标签页。");
+    return null;
 }
 
 /**
@@ -161,12 +176,8 @@ $("startBtn").onclick = async () => {
     const config = readRefreshConfig(mode, (group, unit) => `${group}-${unit}`);
     if (!config) return;
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!Number.isInteger(tab?.id) || tab.id < 0) {
-        showActionError("找不到当前标签页。");
-        return;
-    }
-    requestTaskChange({ action: "start", tabId: tab.id, url: tab.url, config }, loadAllData);
+    const tab = await getActiveTab();
+    if (tab) requestTaskChange({ action: "start", tabId: tab.id, url: tab.url, config });
 };
 
 /**
@@ -174,8 +185,8 @@ $("startBtn").onclick = async () => {
  * 停止当前活动标签页对应的刷新任务
  */
 $("stopBtn").onclick = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    chrome.runtime.sendMessage({ action: "stop", tabId: tab.id }, () => loadAllData());
+    const tab = await getActiveTab();
+    if (tab) requestTaskChange({ action: "stop", tabId: tab.id });
 };
 
 /**
@@ -183,7 +194,7 @@ $("stopBtn").onclick = async () => {
  * 一次性停止所有正在运行的刷新任务
  */
 $("stopAllBtn").onclick = () => {
-    chrome.runtime.sendMessage({ action: "stopAll" }, () => loadAllData());
+    requestTaskChange({ action: "stopAll" });
 };
 
 // ---------- 编辑面板构建 ----------
@@ -298,9 +309,7 @@ function createTaskCard(tabId) {
     };
     const stopButton = card.querySelector(".stop-task-btn");
     stopButton.dataset.stop = tabId;
-    stopButton.onclick = () => {
-        chrome.runtime.sendMessage({ action: "stop", tabId }, loadAllData);
-    };
+    stopButton.onclick = () => requestTaskChange({ action: "stop", tabId });
     return card;
 }
 

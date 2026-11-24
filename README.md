@@ -36,7 +36,7 @@ Install EZ AutoRefresh directly from the Chrome Web Store.
 
 5. Select the project folder.
 
-Requires Chrome 102 or later.
+Requires Chrome 111 or later.
 
 ## Usage
 

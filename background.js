@@ -17,6 +17,8 @@
 // 每个任务包含：tabId, url, mode(fixed|random), interval/min/max, nextRunAt
 let tasks = {};
 const refreshingTasks = new WeakSet();
+const alarmPrefix = "refresh_";
+let changeQueue = Promise.resolve();
 
 // ============================================================
 // Service Worker 就绪机制
@@ -45,6 +47,12 @@ function onReady(cb, onError = logTaskError) {
     initializeTasks().then(cb).catch(onError);
 }
 
+function queueTaskChange(operation) {
+    const result = changeQueue.then(operation);
+    changeQueue = result.catch(() => {});
+    return result;
+}
+
 chrome.runtime.onStartup.addListener(() => {
     initializeTasks().catch(logTaskError);
 });
@@ -71,11 +79,7 @@ async function loadTasks() {
     if (!taskSession) {
         await chrome.storage.session.set({ taskSession: true });
     }
-    try {
-        await restoreTasks();
-    } catch (error) {
-        console.error("恢复刷新闹钟失败", error);
-    }
+    await restoreTasks();
 }
 
 async function rebindTasks(savedTasks) {
@@ -101,7 +105,7 @@ async function rebindTasks(savedTasks) {
 /**
  * 将当前 tasks 对象持久化保存到 chrome.storage.local
  */
-function save() { return chrome.storage.local.set({ tasks }); }
+function save(snapshot = tasks) { return chrome.storage.local.set({ tasks: snapshot }); }
 
 function validatedConfig(config) {
     const maxSeconds = Math.floor((8640000000000000 - Date.now()) / 1000);
@@ -124,19 +128,47 @@ function validatedConfig(config) {
  */
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-/**
- * 为指定任务调度下一次刷新
- * - 固定模式：使用 task.interval 作为间隔
- * - 随机模式：在 [task.min, task.max] 范围内随机选取间隔
- * - 计算下次执行时间 nextRunAt 并保存
- * - 通过 chrome.alarms.create 创建精确的定时闹钟
- * @param {Object} task - 刷新任务对象
- */
-function schedule(task) {
+function withNextRun(task) {
     const sec = task.mode === "fixed" ? task.interval : rand(task.min, task.max);
-    task.nextRunAt = Date.now() + sec * 1000;
-    save();
-    return chrome.alarms.create(`refresh_${task.tabId}`, { when: task.nextRunAt });
+    return { ...task, nextRunAt: Date.now() + sec * 1000 };
+}
+
+function setTaskAlarm(tabId, task) {
+    const name = alarmPrefix + tabId;
+    return task
+        ? chrome.alarms.create(name, { when: task.nextRunAt })
+        : chrome.alarms.clear(name);
+}
+
+// 闹钟和存储都写入成功后才发布新状态。存储失败时恢复已修改的闹钟。
+async function commitTaskChanges(nextTasks, tabIds) {
+    const changedAlarms = [];
+    try {
+        for (const tabId of tabIds) {
+            await setTaskAlarm(tabId, nextTasks[tabId]);
+            changedAlarms.push(tabId);
+        }
+        await save(nextTasks);
+    } catch (error) {
+        const rollbacks = await Promise.allSettled(changedAlarms.map(tabId => setTaskAlarm(tabId, tasks[tabId])));
+        for (const rollback of rollbacks) {
+            if (rollback.status === "rejected") logTaskError(rollback.reason);
+        }
+        throw error;
+    }
+    tasks = nextTasks;
+}
+
+function schedule(task) {
+    const tabId = task.tabId;
+    return commitTaskChanges({ ...tasks, [tabId]: withNextRun(task) }, [tabId]);
+}
+
+function removeTask(tabId) {
+    if (!tasks[tabId]) return;
+    const nextTasks = { ...tasks };
+    delete nextTasks[tabId];
+    return commitTaskChanges(nextTasks, [tabId]);
 }
 
 /**
@@ -147,24 +179,31 @@ function schedule(task) {
  */
 async function restoreTasks() {
     const alarms = new Map((await chrome.alarms.getAll()).map(alarm => [alarm.name, alarm]));
-    const tasksByAlarm = new Map(Object.values(tasks).map(task => [`refresh_${task.tabId}`, task]));
+    const restoredTasks = { ...tasks };
+    let changedDeadlines = false;
+    for (const task of Object.values(tasks)) {
+        if (!Number.isFinite(task.nextRunAt)) {
+            restoredTasks[task.tabId] = withNextRun(task);
+            changedDeadlines = true;
+        }
+    }
+    const tasksByAlarm = new Map(Object.values(restoredTasks).map(task => [alarmPrefix + task.tabId, task]));
     const operations = [];
     for (const name of alarms.keys()) {
-        if (name.startsWith("refresh_") && !tasksByAlarm.has(name)) {
+        if (name.startsWith(alarmPrefix) && !tasksByAlarm.has(name)) {
             operations.push(chrome.alarms.clear(name));
         }
     }
     for (const [name, task] of tasksByAlarm) {
-        if (!Number.isFinite(task.nextRunAt)) {
-            operations.push(schedule(task));
-        } else if (alarms.get(name)?.scheduledTime !== task.nextRunAt) {
-            operations.push(chrome.alarms.create(name, { when: task.nextRunAt }));
+        if (alarms.get(name)?.scheduledTime !== task.nextRunAt) {
+            operations.push(setTaskAlarm(task.tabId, task));
         }
     }
     const results = await Promise.allSettled(operations);
-    results.forEach(result => {
-        if (result.status === "rejected") console.error("恢复刷新闹钟失败", result.reason);
-    });
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+    if (changedDeadlines) await save(restoredTasks);
+    tasks = restoredTasks;
 }
 
 // ============================================================
@@ -184,58 +223,52 @@ async function restoreTasks() {
  * - "stats"      获取当前运行任务数量统计
  */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // 所有需要读取 tasks 的操作都等待初始化完成
-    onReady(() => {
-        const changesConfig = msg.action === "start" || msg.action === "updateTask";
-        const config = changesConfig ? validatedConfig(msg.config) : null;
-        if (changesConfig && !config) {
-            sendResponse({ success: false, error: "刷新间隔必须是有效的正整数秒，随机最小值不能超过最大值。" });
-            return;
-        }
-        if (msg.action === "start") {
-            // 创建新任务并开始调度
-            tasks[msg.tabId] = { tabId: msg.tabId, url: msg.url, ...config };
-            schedule(tasks[msg.tabId]);
-            sendResponse({ success: true });
-        }
-        else if (msg.action === "stop") {
-            // 删除指定任务并清除对应 alarm
-            delete tasks[msg.tabId];
-            chrome.alarms.clear(`refresh_${msg.tabId}`);
-            save();
-            sendResponse({ success: true });
-        }
-        else if (msg.action === "stopAll") {
-            // 清空所有任务和 alarm
-            tasks = {};
-            chrome.alarms.clearAll();
-            save();
-            sendResponse({ success: true });
-        }
-        else if (msg.action === "getTasks") {
-            // 深拷贝返回，避免 popup 直接修改 background 的数据
-            sendResponse(JSON.parse(JSON.stringify(tasks)));
-        }
-        else if (msg.action === "updateTask") {
-            // 更新任务配置：合并新配置，重新调度 alarm
-            const task = tasks[msg.tabId];
-            if (!task) { sendResponse({ success: false, error: "该刷新任务已停止。" }); return; }
-            const updatedTask = { tabId: task.tabId, url: task.url, ...config };
-            tasks[msg.tabId] = updatedTask;
-            schedule(updatedTask);
-            sendResponse({ success: true });
-        }
-        else if (msg.action === "stats") {
-            // 返回当前活跃任务数量
-            sendResponse({ count: Object.keys(tasks).length });
-        }
+    if (!msg || typeof msg.action !== "string") return false;
+    onReady(async () => {
+        sendResponse(await queueTaskChange(() => handleMessage(msg)));
     }, error => {
         logTaskError(error);
         if (msg.action === "getTasks" || msg.action === "stats") sendResponse();
-        else sendResponse({ success: false, error: "加载刷新任务失败" });
+        else sendResponse({ success: false, error: "无法保存刷新任务或更新闹钟，请重试。" });
     });
     return true; // 保持消息通道开启以异步响应
 });
+
+async function handleMessage({ action, tabId, url, config }) {
+    switch (action) {
+        case "getTasks":
+            return tasks;
+        case "stats":
+            return { count: Object.keys(tasks).length };
+        case "start":
+        case "updateTask": {
+            const settings = validatedConfig(config);
+            if (!settings) {
+                return { success: false, error: "刷新间隔必须是有效的正整数秒，随机最小值不能超过最大值。" };
+            }
+            if (action === "start") {
+                const tab = Number.isInteger(tabId) && tabId >= 0
+                    ? await chrome.tabs.get(tabId).catch(() => null)
+                    : null;
+                if (!tab) return { success: false, error: "找不到要刷新的标签页。" };
+            } else {
+                const task = tasks[tabId];
+                if (!task) return { success: false, error: "该刷新任务已停止。" };
+                url = task.url;
+            }
+            await schedule({ tabId, url, ...settings });
+            return { success: true };
+        }
+        case "stop":
+            await removeTask(tabId);
+            return { success: true };
+        case "stopAll": {
+            const tabIds = Object.keys(tasks);
+            if (tabIds.length > 0) await commitTaskChanges({}, tabIds);
+            return { success: true };
+        }
+    }
+}
 
 // ============================================================
 // 闹钟触发：执行实际的页面刷新操作
@@ -250,20 +283,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
  * - 如果标签页已不存在（如被用户关闭），则自动清理任务
  */
 chrome.alarms.onAlarm.addListener(a => {
-    if (!a.name.startsWith("refresh_")) return;
+    if (!a.name.startsWith(alarmPrefix)) return;
     onReady(async () => {
-        const tabId = Number(a.name.replace("refresh_", ""));
+        await changeQueue;
+        const tabId = Number(a.name.slice(alarmPrefix.length));
         const task = tasks[tabId];
         if (!task || task.nextRunAt !== a.scheduledTime || refreshingTasks.has(task)) return;
         refreshingTasks.add(task);
         try {
-            await chrome.tabs.reload(tabId);
-            if (tasks[tabId] === task) schedule(task);
-        } catch (error) {
-            if (tasks[tabId] === task) {
-                delete tasks[tabId];
-                save();
-            }
+            const reloaded = await chrome.tabs.reload(tabId).then(() => true, () => false);
+            await queueTaskChange(async () => {
+                if (tasks[tabId] !== task) return;
+                if (reloaded) {
+                    try {
+                        await schedule(task);
+                        return;
+                    } catch (error) {
+                        logTaskError(error);
+                    }
+                }
+                await removeTask(tabId);
+            });
         } finally {
             refreshingTasks.delete(task);
         }
@@ -279,7 +319,5 @@ chrome.alarms.onAlarm.addListener(a => {
  * 避免后台继续维护无效任务。
  */
 chrome.tabs.onRemoved.addListener(tabId => {
-    onReady(() => {
-        if (tasks[tabId]) { delete tasks[tabId]; chrome.alarms.clear(`refresh_${tabId}`); save(); }
-    });
+    onReady(() => queueTaskChange(() => removeTask(tabId)));
 });
