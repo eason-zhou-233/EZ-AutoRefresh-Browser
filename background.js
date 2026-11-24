@@ -200,10 +200,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             // 更新任务配置：合并新配置，重新调度 alarm
             const task = tasks[msg.tabId];
             if (!task) { sendResponse({ success: false }); return; }
-            Object.assign(task, msg.config);
-            chrome.alarms.clear(`refresh_${msg.tabId}`);
-            schedule(task);
-            save();
+            const updatedTask = { ...task, ...msg.config };
+            tasks[msg.tabId] = updatedTask;
+            schedule(updatedTask);
             sendResponse({ success: true });
         }
         else if (msg.action === "stats") {
@@ -237,9 +236,17 @@ chrome.alarms.onAlarm.addListener(a => {
         const task = tasks[tabId];
         if (!task || task.nextRunAt !== a.scheduledTime || refreshingTasks.has(task)) return;
         refreshingTasks.add(task);
-        try { await chrome.tabs.reload(tabId); schedule(task); }
-        catch (e) { delete tasks[tabId]; save(); }
-        finally { refreshingTasks.delete(task); }
+        try {
+            await chrome.tabs.reload(tabId);
+            if (tasks[tabId] === task) schedule(task);
+        } catch (error) {
+            if (tasks[tabId] === task) {
+                delete tasks[tabId];
+                save();
+            }
+        } finally {
+            refreshingTasks.delete(task);
+        }
     });
 });
 
