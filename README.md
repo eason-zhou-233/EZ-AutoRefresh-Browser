@@ -12,7 +12,7 @@ Designed for monitoring dashboards, ticket systems, status pages, reports, and o
 * Real-time countdown display
 * Edit running tasks without restarting
 * Stop individual tasks or all tasks
-* Automatic task recovery after browser restart
+* Automatic task recovery for uniquely matching URLs after browser restart
 * Chrome Manifest V3 compatible
 * Lightweight and privacy-friendly
 
@@ -35,6 +35,8 @@ Install EZ AutoRefresh directly from the Chrome Web Store.
 4. Click **Load unpacked**.
 
 5. Select the project folder.
+
+Requires Chrome 102 or later.
 
 ## Usage
 
@@ -64,6 +66,8 @@ You can:
 * Edit task settings
 * Stop a single task
 * Stop all tasks
+
+After a restart, the extension rebinds tasks to restored tabs with uniquely matching URLs. Enable **Continue where you left off** in Chrome to restore those tabs. Tasks with no matching tab or with a URL shared by multiple tabs or tasks are skipped.
 
 ## Permissions
 

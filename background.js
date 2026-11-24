@@ -24,59 +24,83 @@ const refreshingTasks = new WeakSet();
 // 问题背景：Chrome 扩展的 Service Worker 在不活跃时会被休眠，
 // 唤醒后需要重新从 chrome.storage 加载数据。如果在数据加载完成前
 // popup 就发来消息（如 getTasks），会导致读取到空数据。
-// 解决方案：使用 ready 标志 + 回调队列，确保所有依赖 tasks 的
+// 解决方案：共享初始化 Promise，确保所有依赖 tasks 的
 // 操作都等到数据加载完成后才执行。
 
-// 就绪标志：true 表示 tasks 数据已完成初始化
-let ready = false;
-// 就绪前收到的回调队列，就绪后逐一执行
-const readyQueue = [];
+let initialization;
 
-/**
- * 注册就绪回调
- * - 如果已经就绪，立即执行回调
- * - 否则将回调加入等待队列，就绪后批量执行
- * @param {Function} cb - 就绪后需要执行的回调函数
- */
-function onReady(cb) {
-    if (ready) { cb(); return; }
-    readyQueue.push(cb);
+function initializeTasks() {
+    initialization ??= loadTasks().catch(error => {
+        initialization = undefined;
+        throw error;
+    });
+    return initialization;
 }
 
-/**
- * 标记为就绪状态，并清空等待队列中的所有回调
- */
-function setReady() {
-    ready = true;
-    readyQueue.forEach(cb => cb());
-    readyQueue.length = 0;
+function logTaskError(error) {
+    console.error("处理刷新任务失败", error);
 }
+
+function onReady(cb, onError = logTaskError) {
+    initializeTasks().then(cb).catch(onError);
+}
+
+chrome.runtime.onStartup.addListener(() => {
+    initializeTasks().catch(logTaskError);
+});
 
 // ============================================================
 // 数据持久化
 // ============================================================
 
 /**
- * 异步加载持久化任务，完成后标记就绪
- * 从 chrome.storage.local 中恢复上次保存的 tasks，
- * 然后调用 restoreTasks() 重新注册所有 alarm，
- * 最后通过 setReady() 允许 popup 消息处理。
+ * 同一浏览器会话内保留原来的标签页 ID。
+ * 浏览器重启或扩展重载后，只恢复能按 URL 唯一匹配的任务。
  */
-chrome.storage.local.get(["tasks"], async d => {
-    tasks = d?.tasks || {};
+async function loadTasks() {
+    const [{ tasks: savedTasks = {} }, { taskSession }] = await Promise.all([
+        chrome.storage.local.get("tasks"),
+        chrome.storage.session.get("taskSession")
+    ]);
+    tasks = savedTasks;
+    if (!taskSession) {
+        if (Object.keys(savedTasks).length > 0) {
+            tasks = await rebindTasks(savedTasks);
+            await save();
+        }
+        await chrome.storage.session.set({ taskSession: true });
+    }
     try {
         await restoreTasks();
     } catch (error) {
         console.error("恢复刷新闹钟失败", error);
-    } finally {
-        setReady();
     }
-});
+}
+
+async function rebindTasks(savedTasks) {
+    const tabsByUrl = new Map();
+    for (const tab of await chrome.tabs.query({})) {
+        const url = tab.pendingUrl || tab.url;
+        if (!url || !Number.isInteger(tab.id) || tab.id < 0) continue;
+        tabsByUrl.set(url, tabsByUrl.has(url) ? null : tab.id);
+    }
+
+    const restored = {};
+    const seenUrls = new Set();
+    for (const task of Object.values(savedTasks)) {
+        const tabId = tabsByUrl.get(task.url);
+        if (tabId == null) continue;
+        if (seenUrls.has(task.url)) delete restored[tabId];
+        else restored[tabId] = { ...task, tabId };
+        seenUrls.add(task.url);
+    }
+    return restored;
+}
 
 /**
  * 将当前 tasks 对象持久化保存到 chrome.storage.local
  */
-function save() { chrome.storage.local.set({ tasks }); }
+function save() { return chrome.storage.local.set({ tasks }); }
 
 /**
  * 生成 [min, max] 范围内的随机整数，用于随机刷新模式
@@ -98,7 +122,7 @@ function schedule(task) {
     const sec = task.mode === "fixed" ? task.interval : rand(task.min, task.max);
     task.nextRunAt = Date.now() + sec * 1000;
     save();
-    chrome.alarms.create(`refresh_${task.tabId}`, { when: task.nextRunAt });
+    return chrome.alarms.create(`refresh_${task.tabId}`, { when: task.nextRunAt });
 }
 
 /**
@@ -108,15 +132,22 @@ function schedule(task) {
  * - 保留原定时间，让已到期的任务尽快刷新
  */
 async function restoreTasks() {
-    if (Object.keys(tasks).length === 0) return;
     const alarms = new Map((await chrome.alarms.getAll()).map(alarm => [alarm.name, alarm]));
-    const results = await Promise.allSettled(Object.values(tasks).map(task => {
-        const name = `refresh_${task.tabId}`;
-        if (!Number.isFinite(task.nextRunAt)) return schedule(task);
-        if (alarms.get(name)?.scheduledTime !== task.nextRunAt) {
-            return chrome.alarms.create(name, { when: task.nextRunAt });
+    const tasksByAlarm = new Map(Object.values(tasks).map(task => [`refresh_${task.tabId}`, task]));
+    const operations = [];
+    for (const name of alarms.keys()) {
+        if (name.startsWith("refresh_") && !tasksByAlarm.has(name)) {
+            operations.push(chrome.alarms.clear(name));
         }
-    }));
+    }
+    for (const [name, task] of tasksByAlarm) {
+        if (!Number.isFinite(task.nextRunAt)) {
+            operations.push(schedule(task));
+        } else if (alarms.get(name)?.scheduledTime !== task.nextRunAt) {
+            operations.push(chrome.alarms.create(name, { when: task.nextRunAt }));
+        }
+    }
+    const results = await Promise.allSettled(operations);
     results.forEach(result => {
         if (result.status === "rejected") console.error("恢复刷新闹钟失败", result.reason);
     });
@@ -179,6 +210,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             // 返回当前活跃任务数量
             sendResponse({ count: Object.keys(tasks).length });
         }
+    }, error => {
+        logTaskError(error);
+        if (msg.action === "getTasks" || msg.action === "stats") sendResponse();
+        else sendResponse({ success: false, error: "加载刷新任务失败" });
     });
     return true; // 保持消息通道开启以异步响应
 });
